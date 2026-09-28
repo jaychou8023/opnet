@@ -54,6 +54,7 @@ DEFAULT_CONFIG = {
 }
 
 _config_lock = threading.Lock()
+_config_mtime = 0.0
 CONFIG_PATH = os.path.join(HERE, "config.json")
 
 
@@ -82,6 +83,36 @@ def save_config(cfg):
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
+
+
+def publish_config(cfg):
+    """保存到磁盘，并让**后续所有请求**立即看到新配置。
+
+    NOTE: 这里必须写类属性 Handler.cfg。每个 HTTP 请求都会新建一个 handler 实例，
+    写 self.cfg 只影响当前这一个请求对象，下一个请求读到的还是启动时的旧配置
+    —— 表现为"保存成功但页面/脚本没变化，只有重启服务才生效"。
+    """
+    global _config_mtime
+    save_config(cfg)
+    Handler.cfg = cfg
+    try:
+        _config_mtime = os.path.getmtime(CONFIG_PATH)
+    except OSError:
+        _config_mtime = 0.0
+
+
+def current_config():
+    """读取当前配置；若 config.json 被外部改动（手工编辑/上传）则自动重新加载"""
+    global _config_mtime
+    with _config_lock:
+        try:
+            mtime = os.path.getmtime(CONFIG_PATH)
+        except OSError:
+            mtime = 0.0
+        if Handler.cfg is None or mtime != _config_mtime:
+            Handler.cfg = load_config()
+            _config_mtime = mtime
+        return Handler.cfg
 
 
 def public_config(cfg):
@@ -555,7 +586,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_text(code, json.dumps(obj, ensure_ascii=False), "application/json; charset=utf-8")
 
     def auth_ok(self):
-        cfg = self.cfg
+        cfg = current_config()
         header = self.headers.get("Authorization", "")
         if not header.startswith("Basic "):
             return False
@@ -598,12 +629,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/config":
             if not self.require_auth():
                 return
-            return self.send_json(200, public_config(self.cfg))
+            return self.send_json(200, public_config(current_config()))
         if path == "/api/status":
             if not self.require_auth():
                 return
             return self.send_json(200, {"machines": {
-                m["name"]: port_is_open(m["port"]) for m in self.cfg["machines"]}})
+                m["name"]: port_is_open(m["port"]) for m in current_config()["machines"]}})
         if path.startswith("/i/"):
             return self.serve_key_path(path)
         return self.send_text(404, "not found")
@@ -627,8 +658,7 @@ class Handler(BaseHTTPRequestHandler):
                         cfg[k] = int(body[k])
                 if not cfg.get("admin_pass"):
                     return self.send_json(400, {"ok": False, "error": "面板密码不能为空"})
-                save_config(cfg)
-                self.cfg = cfg
+                publish_config(cfg)
             return self.send_json(200, {"ok": True})
 
         if path == "/api/machines":
@@ -654,8 +684,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json(400, {"ok": False, "error": "本机端口非法"})
                 cfg["machines"].append({
                     "name": name, "key": secrets.token_hex(16), "port": port, "net_port": net_port})
-                save_config(cfg)
-                self.cfg = cfg
+                publish_config(cfg)
             return self.send_json(200, {"ok": True, "port": port})
 
         if path == "/api/machines/delete":
@@ -666,15 +695,14 @@ class Handler(BaseHTTPRequestHandler):
                 cfg["machines"] = [m for m in cfg["machines"] if m["name"] != name]
                 if len(cfg["machines"]) == before:
                     return self.send_json(404, {"ok": False, "error": "机器不存在"})
-                save_config(cfg)
-                self.cfg = cfg
+                publish_config(cfg)
             return self.send_json(200, {"ok": True})
 
         return self.send_text(404, "not found")
 
     # ---------- 具体处理 ----------
     def serve_page(self):
-        cfg = self.cfg
+        cfg = current_config()
 
         warn = ""
         if not cfg.get("token"):
@@ -703,7 +731,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.send_text(200, html, "text/html; charset=utf-8")
 
     def serve_key_path(self, path):
-        cfg = self.cfg
+        cfg = current_config()
         parts = [p for p in path.split("/") if p != ""]  # ['i', key, maybe...]
         if len(parts) < 2:
             return self.send_text(404, "not found")
@@ -764,6 +792,10 @@ def main():
         print("已生成初始配置 %s（内含随机 token 和面板密码，请查看）" % CONFIG_PATH, flush=True)
 
     Handler.cfg = load_config()
+    try:
+        _config_mtime = os.path.getmtime(CONFIG_PATH)
+    except OSError:
+        _config_mtime = 0.0
     host, _, port = args.listen.rpartition(":")
     httpd = ThreadingHTTPServer((host or "0.0.0.0", int(port)), Handler)
     print("OpNet 面板已启动: http://%s:%s  (配置: %s)" % (host, port, CONFIG_PATH), flush=True)
