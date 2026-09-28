@@ -197,7 +197,8 @@ PAGE = """<!DOCTYPE html>
 </head>
 <body>
 <h1>OpNet 上线面板</h1>
-<div class="sub">配置一次，之后每台机器只跑一条命令即可上线。<!--VERSION--></div>
+<div class="sub">配置一次，之后每台机器只跑一条命令即可上线。端口范围 <!--VERSION-->
+ 　<span style="color:#b26a00">提示：用 http:// 访问时浏览器会禁止自动复制，「复制」会退化为「已选中，按 Ctrl/⌘+C」；用 https:// 访问则是一键复制。</span></div>
 
 <div id="warnbox"><!--WARN--></div>
 
@@ -232,6 +233,13 @@ PAGE = """<!DOCTYPE html>
   <div class="hint">端口必须落在 <!--RANGE--> 之间；被占用的端口服务端会直接拒绝，不会自动改号。</div>
 </div>
 
+<div class="card" id="manual" style="display:none;border-color:#1677ff">
+  <label>浏览器不允许自动复制（当前是 http:// 非安全上下文），命令已为你选中 —— 请直接按 Ctrl / ⌘ + C</label>
+  <input id="manualText" readonly onclick="this.select()"
+         style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px">
+  <div style="margin-top:8px"><button onclick="closeManual()">关闭</button></div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -243,7 +251,40 @@ const CMD_STOP_SH = k => '(command -v curl >/dev/null && curl -fsSL ' + BASE + '
 const CMD_STOP_PS = k => 'irm ' + BASE + '/i/' + k + '/stop.ps1 | iex';
 
 function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1600);}
-function copy(text){navigator.clipboard.writeText(text).then(()=>toast('已复制'),()=>{window.prompt('手动复制：',text);});}
+
+// 复制：navigator.clipboard 只在 HTTPS / localhost 存在，
+// 用 http://内网IP 打开时必须退回到 execCommand，再不行就弹出可全选的输入框
+function legacyCopy(text){
+  try{
+    const ta=document.createElement('textarea');
+    ta.value=text; ta.setAttribute('readonly','');
+    ta.style.position='fixed'; ta.style.top='-1000px'; ta.style.left='-1000px';
+    document.body.appendChild(ta);
+    ta.focus(); ta.select(); ta.setSelectionRange(0, text.length);
+    const ok=document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  }catch(e){ return false; }
+}
+function showManual(text){
+  const box=document.getElementById('manual');
+  const inp=document.getElementById('manualText');
+  inp.value=text; box.style.display='block';
+  inp.focus(); inp.select();
+  box.scrollIntoView({block:'nearest'});
+}
+function closeManual(){ document.getElementById('manual').style.display='none'; }
+function copy(text){
+  if(window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(
+      ()=>toast('已复制'),
+      ()=>{ if(legacyCopy(text)) toast('已复制'); else showManual(text); }
+    );
+    return;
+  }
+  if(legacyCopy(text)){ toast('已复制'); return; }
+  showManual(text);
+}
 
 async function api(path, body){
   const r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body||{})});
@@ -312,6 +353,7 @@ def render_rows(cfg):
             '<td><div class="row-actions">'
             '<button class="tiny" onclick="copy(CMD_SH(\'%s\'))">复制 Linux/mac</button>'
             '<button class="tiny" onclick="copy(CMD_PS(\'%s\'))">复制 Windows</button>'
+            '<button class="tiny" onclick="showManual(CMD_SH(\'%s\'))">查看</button>'
             '<button class="tiny" onclick="copy(CMD_STOP_SH(\'%s\'))">复制下线(sh)</button>'
             '<button class="tiny" onclick="copy(CMD_STOP_PS(\'%s\'))">复制下线(ps1)</button>'
             "</div></td>"
@@ -321,7 +363,7 @@ def render_rows(cfg):
             "</tr>"
             % (name, m["port"], m.get("net_port", 22),
                "on" if online else "off", name, "在线" if online else "离线",
-               m["key"], m["key"], m["key"], m["key"], name)
+               m["key"], m["key"], m["key"], m["key"], m["key"], name)
         )
     return "\n".join(rows)
 
