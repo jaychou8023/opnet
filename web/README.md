@@ -12,7 +12,8 @@
 | `POST /api/machines` `POST /api/machines/delete` | Basic Auth | 增删机器（新增时自动生成 32 字节随机 key） |
 | `GET /i/<key>` | key | 该机器的 Linux/macOS 上线脚本（sh） |
 | `GET /i/<key>.ps1` | key | 该机器的 Windows 上线脚本（PowerShell） |
-| `GET /i/<key>/stop.sh` `/stop.ps1` | key | 下线脚本 |
+| `GET /i/<key>/stop.sh` `/stop.ps1` | key | 下线脚本（只停隧道，保留客户端文件与 sshd） |
+| `GET /i/<key>/uninstall.sh` `/uninstall.ps1` | key | 卸载脚本（停隧道 + 删除客户端文件，**不动 sshd**） |
 | `GET /i/<key>/bin/<文件名>` | key | 客户端二进制（白名单 4 个文件，防目录穿越） |
 | `GET /healthz` | 无 | 健康检查 |
 
@@ -64,6 +65,29 @@ irm https://你的域名/i/<key>.ps1 | iex
 ```
 
 脚本做四件事：按系统/架构下载客户端 → 装并启用 sshd → 后台起隧道（`-wantport` 写死端口）→ 打印 `ssh -p <端口> <用户>@<域名>`。
+
+## 下线 / 卸载的区别
+
+| 操作 | 进程 | 客户端文件 | sshd（装/启用状态） |
+|---|---|---|---|
+| **下线** `stop.sh` / `stop.ps1` | 停止 | 保留 | 不动（仍运行、仍开机自启） |
+| **卸载** `uninstall.sh` / `uninstall.ps1` | 停止 | 删除 | 不动（仍运行、仍开机自启） |
+
+两者都**不会**碰 sshd——那是系统组件，而且关掉它很可能切断你当前正在使用的 SSH 会话
+（尤其是当你正通过隧道连进去的时候）。要恢复系统原状，需手动执行：
+
+```bash
+# Linux
+systemctl disable --now ssh
+# macOS（关闭"远程登录"）
+sudo launchctl disable system/com.openssh.sshd
+```
+```powershell
+# Windows
+Stop-Service sshd; Set-Service sshd -StartupType Manual
+# 连可选功能一起卸载
+Remove-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+```
 
 ## 已知限制
 

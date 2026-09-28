@@ -1,0 +1,48 @@
+# OpNet 卸载脚本（Windows）：停隧道 + 删除本机客户端与日志
+# 按设计【不动 sshd】——停掉 sshd 会切断你当前可能正在使用的远程会话
+# 用法: 以【管理员】身份打开 PowerShell，执行
+#   irm {{PUBLIC_BASE}}/i/{{KEY}}/uninstall.ps1 | iex
+$ErrorActionPreference = 'Stop'
+try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
+
+$WANT_PORT = "{{WANT_PORT}}"
+$MACHINE   = "{{NAME}}"
+$dir       = 'C:\opnet-client'
+
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) { Write-Host "[opnet] 请以【管理员】身份打开 PowerShell" -ForegroundColor Red; exit 1 }
+
+Write-Host "[opnet] 卸载机器 $MACHINE（映射端口 $WANT_PORT）"
+
+# 1) 停隧道进程
+$procs = Get-CimInstance Win32_Process -Filter "Name = 'opnet-client.exe'" -ErrorAction SilentlyContinue |
+         Where-Object { $_.CommandLine -like "*-wantport $WANT_PORT*" }
+if ($procs) {
+    Write-Host "[opnet] 停止隧道进程 (pid: $($procs.ProcessId -join ', '))"
+    $procs | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Seconds 1
+} else {
+    Write-Host "[opnet] 隧道本来就没在运行"
+}
+
+# 2) 删客户端与日志
+if (Test-Path $dir) {
+    Write-Host "[opnet] 删除 $dir"
+    Remove-Item -Recurse -Force $dir
+} else {
+    Write-Host "[opnet] $dir 不存在，跳过"
+}
+
+Write-Host ""
+Write-Host "========================================"
+Write-Host " 已卸载"
+Write-Host "   隧道进程  : 已停止，服务端端口 $WANT_PORT 已释放"
+Write-Host "   客户端文件: 已删除（$dir）"
+Write-Host "----------------------------------------"
+Write-Host " 未改动（按设计保留）："
+Write-Host "   OpenSSH Server 仍在运行，且仍为自动启动"
+Write-Host "   如需一并关闭（会切断当前远程会话）："
+Write-Host "     Stop-Service sshd; Set-Service sshd -StartupType Manual"
+Write-Host "   如需连可选功能一起卸载："
+Write-Host "     Remove-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0"
+Write-Host "========================================"

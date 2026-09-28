@@ -323,7 +323,8 @@ PAGE = """<!DOCTYPE html>
     <div><label>要暴露的本机端口</label><input id="new_netport" type="number" value="22"></div>
     <div><button class="btn btn-primary" onclick="addMachine()">添加机器</button></div>
   </div>
-  <div class="hint">端口必须落在 <!--RANGE--> 之间；被占用的端口服务端会直接拒绝，不会自动改号。</div>
+  <div class="hint">端口必须落在 <!--RANGE--> 之间；被占用的端口服务端会直接拒绝，不会自动改号。<br>
+    <b>下线</b>只停隧道（客户端文件与 sshd 保留，下次上线更快）；<b>卸载</b>会停隧道并删除客户端文件，但都不会动 sshd。</div>
 </div>
 
 <div class="card manual" id="manual" style="display:none">
@@ -349,8 +350,13 @@ const FETCH_CMD = url => 'if command -v curl >/dev/null 2>&1; then curl -fsSL ' 
   '; else echo "需要 curl 或 wget，请先安装" >&2; exit 1; fi';
 const CMD_SH      = k => FETCH_CMD(BASE + '/i/' + k) + ' | sudo bash';
 const CMD_STOP_SH = k => FETCH_CMD(BASE + '/i/' + k + '/stop.sh') + ' | sudo bash';
+const CMD_UNINSTALL_SH = k => FETCH_CMD(BASE + '/i/' + k + '/uninstall.sh') + ' | sudo bash';
 const CMD_PS      = k => 'irm ' + BASE + '/i/' + k + '.ps1 | iex';
 const CMD_STOP_PS = k => 'irm ' + BASE + '/i/' + k + '/stop.ps1 | iex';
+const CMD_UNINSTALL_PS = k => 'irm ' + BASE + '/i/' + k + '/uninstall.ps1 | iex';
+
+const CMDS_UNIX = { on: CMD_SH, off: CMD_STOP_SH, uninstall: CMD_UNINSTALL_SH };
+const CMDS_WIN  = { on: CMD_PS, off: CMD_STOP_PS, uninstall: CMD_UNINSTALL_PS };
 
 function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1600);}
 function el(tag, cls, text){const e=document.createElement(tag); if(cls) e.className=cls; if(text!=null) e.textContent=text; return e;}
@@ -417,7 +423,7 @@ function viewBtn(group, shOn, shOff, psOn, psOff){
   return b;
 }
 
-function osGroup(title, tag, onCmd, offCmd, m, manualItems){
+function osGroup(title, tag, cmds, m, manualItems){
   const g = el('div','group');
   const t = el('div','gtitle');
   t.appendChild(document.createTextNode(title));
@@ -425,8 +431,9 @@ function osGroup(title, tag, onCmd, offCmd, m, manualItems){
   g.appendChild(t);
 
   const row = el('div','btnrow');
-  row.appendChild(copyBtn('复制上线命令', title, 'btn-primary', () => onCmd(m.key)));
-  row.appendChild(copyBtn('复制下线命令', title, '', () => offCmd(m.key)));
+  row.appendChild(copyBtn('复制上线命令', title, 'btn-primary', () => cmds.on(m.key)));
+  row.appendChild(copyBtn('复制下线命令', title, '', () => cmds.off(m.key)));
+  row.appendChild(copyBtn('复制卸载命令', title, 'btn-ghost btn-danger', () => cmds.uninstall(m.key)));
   const v = el('button','btn btn-ghost','查看命令');
   v.onclick = () => showManual(m.name + ' · ' + title, manualItems(m));
   row.appendChild(v);
@@ -463,15 +470,17 @@ function renderMachines(){
     c2.appendChild(el('b', null, String(m.net_port))); meta.appendChild(c2);
     card.appendChild(meta);
 
-    card.appendChild(osGroup('Linux / macOS', '需要 sudo', CMD_SH, CMD_STOP_SH, m,
+    card.appendChild(osGroup('Linux / macOS', '需要 sudo', CMDS_UNIX, m,
       mm => ([
-        {label:'上线命令', text: CMD_SH(mm.key)},
-        {label:'下线命令', text: CMD_STOP_SH(mm.key)},
+        {label:'上线命令（装 sshd + 起隧道）', text: CMD_SH(mm.key)},
+        {label:'下线命令（只停隧道，保留客户端文件与 sshd）', text: CMD_STOP_SH(mm.key)},
+        {label:'卸载命令（停隧道 + 删除客户端文件，不动 sshd）', text: CMD_UNINSTALL_SH(mm.key)},
       ])));
-    card.appendChild(osGroup('Windows', '需管理员 PowerShell', CMD_PS, CMD_STOP_PS, m,
+    card.appendChild(osGroup('Windows', '需管理员 PowerShell', CMDS_WIN, m,
       mm => ([
-        {label:'上线命令', text: CMD_PS(mm.key)},
-        {label:'下线命令', text: CMD_STOP_PS(mm.key)},
+        {label:'上线命令（装 OpenSSH Server + 起隧道）', text: CMD_PS(mm.key)},
+        {label:'下线命令（只停隧道，保留客户端文件与 sshd）', text: CMD_STOP_PS(mm.key)},
+        {label:'卸载命令（停隧道 + 删除客户端文件，不动 sshd）', text: CMD_UNINSTALL_PS(mm.key)},
       ])));
 
     const foot = el('div','mfoot');
@@ -764,12 +773,20 @@ class Handler(BaseHTTPRequestHandler):
             with open(file_path, "rb") as fh:
                 return self.send_text(200, fh.read(), "application/octet-stream")
 
-        # /i/<key>/stop.sh  |  /i/<key>/stop.ps1
+        # /i/<key>/stop.sh | .ps1      —— 只停隧道
         if rest and rest[0].startswith("stop"):
             if rest[0].endswith(".ps1") or ps1:
                 return self.send_text(200, render("stop.ps1.tmpl", machine_mapping(cfg, machine)),
                                       "text/plain; charset=utf-8")
             return self.send_text(200, render("stop.sh.tmpl", machine_mapping(cfg, machine)),
+                                  "text/plain; charset=utf-8")
+
+        # /i/<key>/uninstall.sh | .ps1 —— 停隧道 + 删文件（不动 sshd）
+        if rest and rest[0].startswith("uninstall"):
+            if rest[0].endswith(".ps1") or ps1:
+                return self.send_text(200, render("uninstall.ps1.tmpl", machine_mapping(cfg, machine)),
+                                      "text/plain; charset=utf-8")
+            return self.send_text(200, render("uninstall.sh.tmpl", machine_mapping(cfg, machine)),
                                   "text/plain; charset=utf-8")
 
         # /i/<key>  |  /i/<key>.ps1
