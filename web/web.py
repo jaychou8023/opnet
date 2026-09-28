@@ -41,8 +41,9 @@ BIN_WHITELIST = {
 KEY_RE = re.compile(r"^[0-9a-f]{16,64}$")
 
 DEFAULT_CONFIG = {
-    "public_base": "http://10.168.1.4:8089",
-    "server_host": "10.168.1.4",
+    # 首次运行（没有 config.json）时生成的占位配置；真实值请在面板里填写
+    "public_base": "http://127.0.0.1:8089",
+    "server_host": "example.com",
     "control_port": 2221,
     "base_port": 2222,
     "port_slots": 100,

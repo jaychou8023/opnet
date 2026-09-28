@@ -5,5 +5,11 @@ __pycache__/
 # 运行时配置（含 token 与面板密码）
 web/config.json
 
+# 本地构建产物（README 里 go build 的输出名；正式产物在 release/）
+/opnet-server
+/opnet-client
+/server
+/client
+
 # macOS
 .DS_Store
