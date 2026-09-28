@@ -166,94 +166,161 @@ PAGE = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OpNet 上线面板</title>
 <style>
-  :root { color-scheme: light dark; }
-  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; margin: 0; padding: 24px;
-         background: #f6f7f9; color: #1c1e21; }
-  h1 { font-size: 20px; margin: 0 0 4px; }
-  h2 { font-size: 15px; margin: 24px 0 8px; }
-  .sub { color: #666; font-size: 13px; margin-bottom: 16px; }
-  .card { background: #fff; border: 1px solid #e3e6ea; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
-  label { display: block; font-size: 12px; color: #555; margin-bottom: 4px; }
-  input { padding: 6px 8px; border: 1px solid #ccd2d9; border-radius: 6px; font-size: 13px; width: 100%; box-sizing: border-box; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
-  button { padding: 6px 12px; border: 1px solid #ccd2d9; border-radius: 6px; background: #fff;
-           font-size: 13px; cursor: pointer; }
-  button.primary { background: #1677ff; border-color: #1677ff; color: #fff; }
-  button.tiny { padding: 3px 8px; font-size: 12px; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #eef1f4; vertical-align: middle; }
-  th { font-size: 12px; color: #666; font-weight: 500; }
-  code { background: #f2f4f7; padding: 2px 5px; border-radius: 4px; font-size: 12px; word-break: break-all; }
-  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; }
-  .on { background: #e6ffec; color: #1a7f37; }
-  .off { background: #f0f1f3; color: #888; }
-  .row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-  .hint { font-size: 12px; color: #888; margin-top: 6px; }
-  .warn { background: #fff8e6; border: 1px solid #ffe08a; padding: 10px 12px; border-radius: 8px; font-size: 13px; }
-  .toast { position: fixed; right: 20px; bottom: 20px; background: #1c1e21; color: #fff; padding: 8px 14px;
-           border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; }
-  .toast.show { opacity: 1; }
+  :root{
+    color-scheme: light dark;
+    --bg:#f4f5f7; --card:#fff; --line:#e4e7ec; --line-soft:#f1f3f6;
+    --text:#16181d; --muted:#6b7280; --brand:#2f6fed; --brand-ink:#fff; --brand-soft:#eef4ff;
+    --ok:#0f9d58; --ok-soft:#e7f7ee; --off:#98a1ae; --off-soft:#f0f2f5;
+    --warn-bg:#fff8e6; --warn-line:#ffe08a; --warn-ink:#8a5a00;
+    --danger:#d92d20; --radius:12px;
+    --shadow:0 1px 2px rgba(16,24,40,.04), 0 1px 3px rgba(16,24,40,.06);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#0f1115; --card:#171a21; --line:#262b35; --line-soft:#1f242d;
+           --text:#e8eaee; --muted:#98a1b0; --brand:#4b8bf5; --brand-soft:#1b2740;
+           --ok:#3ecf8e; --ok-soft:#12301f; --off:#7d8798; --off-soft:#1e232c;
+           --warn-bg:#2c2411; --warn-line:#5c4a15; --warn-ink:#e2c07a; --shadow:none; }
+  }
+  *{ box-sizing:border-box; }
+  body{ margin:0; padding:28px 20px 64px; background:var(--bg); color:var(--text);
+        font:14px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; }
+  .wrap{ max-width:1100px; margin:0 auto; }
+  h1{ font-size:22px; margin:0 0 6px; letter-spacing:.2px; }
+  .sub{ color:var(--muted); font-size:13px; margin-bottom:18px; }
+  .card{ background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+         padding:18px; margin-bottom:16px; box-shadow:var(--shadow); }
+  .card > h2{ font-size:14px; font-weight:600; margin:0 0 14px; display:flex;
+              align-items:center; justify-content:space-between; gap:10px; }
+  .count{ font-size:12px; font-weight:400; color:var(--muted); }
+  .subhead{ font-size:12px; color:var(--muted); margin:16px 0 8px; }
+  .subhead:first-of-type{ margin-top:0; }
+  label{ display:block; font-size:12px; color:var(--muted); margin-bottom:5px; }
+  input{ font:inherit; font-size:13px; padding:7px 10px; width:100%; color:var(--text);
+         background:var(--card); border:1px solid var(--line); border-radius:9px; }
+  input:focus{ outline:none; border-color:var(--brand); box-shadow:0 0 0 3px var(--brand-soft); }
+  .fieldgrid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:12px; }
+
+  .btn{ font:inherit; font-size:13px; padding:7px 13px; border-radius:9px; cursor:pointer; white-space:nowrap;
+        border:1px solid var(--line); background:var(--card); color:var(--text);
+        transition:background .12s,border-color .12s,color .12s,transform .06s; }
+  .btn:hover{ background:var(--line-soft); }
+  .btn:active{ transform:translateY(1px); }
+  .btn-primary{ background:var(--brand); border-color:var(--brand); color:var(--brand-ink); font-weight:500; }
+  .btn-primary:hover{ background:var(--brand); filter:brightness(1.07); }
+  .btn-ghost{ border-color:transparent; background:transparent; color:var(--muted); }
+  .btn-ghost:hover{ background:var(--line-soft); color:var(--text); }
+  .btn-danger:hover{ color:var(--danger); }
+  .btn.copied{ background:var(--ok-soft); border-color:transparent; color:var(--ok); font-weight:500; }
+
+  .machines{ display:grid; grid-template-columns:repeat(auto-fill,minmax(410px,1fr)); gap:14px; }
+  @media (max-width:600px){ .machines{ grid-template-columns:1fr; } }
+  .mcard{ border:1px solid var(--line); border-radius:var(--radius); padding:16px;
+          display:flex; flex-direction:column; gap:13px; background:var(--card); }
+  .mhead{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .mname{ font-size:15px; font-weight:600; word-break:break-all; }
+  .mmeta{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:13px; color:var(--muted); }
+  .chip{ background:var(--line-soft); border-radius:7px; padding:3px 9px; }
+  .chip b{ color:var(--text); font-variant-numeric:tabular-nums; }
+  .pill{ display:inline-flex; align-items:center; gap:6px; font-size:12px;
+         padding:3px 10px; border-radius:999px; white-space:nowrap; }
+  .pill .dot{ width:6px; height:6px; border-radius:50%; background:currentColor; }
+  .pill.on{ background:var(--ok-soft); color:var(--ok); }
+  .pill.off{ background:var(--off-soft); color:var(--off); }
+  .group{ border-top:1px dashed var(--line); padding-top:12px; }
+  .gtitle{ font-size:12px; color:var(--muted); margin-bottom:9px; display:flex; align-items:center; gap:8px; }
+  .gtag{ background:var(--brand-soft); color:var(--brand); border-radius:5px; padding:1px 7px; font-size:11px; }
+  .btnrow{ display:flex; gap:8px; flex-wrap:wrap; }
+  .mfoot{ border-top:1px dashed var(--line); padding-top:11px; display:flex; justify-content:flex-end; }
+  .empty{ border:1px dashed var(--line); border-radius:var(--radius); padding:30px 0;
+          text-align:center; color:var(--muted); font-size:13px; }
+  .addform{ display:grid; grid-template-columns:1.3fr .8fr .8fr auto; gap:12px; align-items:end;
+            border-top:1px dashed var(--line); margin-top:18px; padding-top:18px; }
+  @media (max-width:660px){ .addform{ grid-template-columns:1fr 1fr; } }
+  .hint{ font-size:12px; color:var(--muted); margin-top:10px; }
+  .warn{ background:var(--warn-bg); border:1px solid var(--warn-line); color:var(--warn-ink);
+         padding:11px 14px; border-radius:10px; font-size:13px; }
+  code{ background:var(--line-soft); padding:2px 6px; border-radius:5px;
+        font:12px ui-monospace,Menlo,Consolas,monospace; }
+  .manual{ border-color:var(--brand); }
+  .mhead2{ display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
+  .mrow{ margin-bottom:10px; }
+  .mlabel{ font-size:12px; color:var(--muted); margin-bottom:5px; }
+  .minput{ font:12px ui-monospace,Menlo,Consolas,monospace; }
+  .toast{ position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(8px);
+          background:#16181d; color:#fff; padding:9px 16px; border-radius:10px; font-size:13px;
+          opacity:0; transition:opacity .18s,transform .18s; pointer-events:none; }
+  .toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
 </style>
 </head>
 <body>
+<div class="wrap">
 <h1>OpNet 上线面板</h1>
-<div class="sub">配置一次，之后每台机器只跑一条命令即可上线。端口范围 <!--VERSION-->
- 　<span style="color:#b26a00">提示：用 http:// 访问时浏览器会禁止自动复制，「复制」会退化为「已选中，按 Ctrl/⌘+C」；用 https:// 访问则是一键复制。</span></div>
+<div class="sub">配置一次，之后每台机器只跑一条命令即可上线。端口范围 <!--VERSION--></div>
 
 <div id="warnbox"><!--WARN--></div>
 
 <div class="card">
-  <h2 style="margin-top:0">全局配置</h2>
-  <div class="grid">
+  <h2>全局配置</h2>
+  <div class="subhead">对外地址（会写进每台机器的一键命令里）</div>
+  <div class="fieldgrid">
     <div><label>公网地址（脚本与二进制下载用，含 https://）</label><input id="public_base" value="<!--PUBLIC_BASE-->"></div>
     <div><label>服务端地址（客户端连接用，域名或 IP）</label><input id="server_host" value="<!--SERVER_HOST-->"></div>
+  </div>
+  <div class="subhead">端口范围</div>
+  <div class="fieldgrid">
     <div><label>控制端口</label><input id="control_port" type="number" value="<!--CONTROL_PORT-->"></div>
     <div><label>映射端口基址</label><input id="base_port" type="number" value="<!--BASE_PORT-->"></div>
     <div><label>端口槽位数</label><input id="port_slots" type="number" value="<!--PORT_SLOTS-->"></div>
+  </div>
+  <div class="subhead">安全与存储</div>
+  <div class="fieldgrid">
     <div><label>Token（留空表示不修改）</label><input id="token" placeholder="********"></div>
     <div><label>面板密码（留空表示不修改）</label><input id="admin_pass" type="password" placeholder="********"></div>
     <div><label>二进制目录</label><input id="bin_dir" value="<!--BIN_DIR-->"></div>
   </div>
-  <div class="hint">当前 token: <code><!--TOKEN_MASK--></code></div>
-  <div style="margin-top:12px"><button class="primary" onclick="saveConfig()">保存配置</button></div>
+  <div class="hint">当前 token：<code><!--TOKEN_MASK--></code></div>
+  <div style="margin-top:14px"><button class="btn btn-primary" onclick="saveConfig()">保存配置</button></div>
 </div>
 
 <div class="card">
-  <h2 style="margin-top:0">机器清单</h2>
-  <table>
-    <thead><tr><th>机器</th><th>映射端口</th><th>本机端口</th><th>状态</th><th>一键上线</th><th></th></tr></thead>
-    <tbody><!--ROWS--></tbody>
-  </table>
-  <div class="grid" style="margin-top:14px">
+  <h2>机器清单 <span class="count" id="mcount"></span></h2>
+  <div class="machines" id="machines"></div>
+
+  <div class="addform">
     <div><label>新增机器名称</label><input id="new_name" placeholder="例如 mac-mini / win-pc"></div>
     <div><label>映射端口</label><input id="new_port" type="number" placeholder="<!--NEXT_PORT-->"></div>
     <div><label>要暴露的本机端口</label><input id="new_netport" type="number" value="22"></div>
-    <div style="display:flex;align-items:flex-end"><button class="primary" onclick="addMachine()">添加机器</button></div>
+    <div><button class="btn btn-primary" onclick="addMachine()">添加机器</button></div>
   </div>
   <div class="hint">端口必须落在 <!--RANGE--> 之间；被占用的端口服务端会直接拒绝，不会自动改号。</div>
 </div>
 
-<div class="card" id="manual" style="display:none;border-color:#1677ff">
-  <label>浏览器不允许自动复制（当前是 http:// 非安全上下文），命令已为你选中 —— 请直接按 Ctrl / ⌘ + C</label>
-  <input id="manualText" readonly onclick="this.select()"
-         style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px">
-  <div style="margin-top:8px"><button onclick="closeManual()">关闭</button></div>
+<div class="card manual" id="manual" style="display:none">
+  <div class="mhead2">
+    <strong id="manualTitle">手动复制</strong>
+    <button class="btn btn-ghost" onclick="closeManual()">关闭</button>
+  </div>
+  <div id="manualList"></div>
+  <div class="hint">浏览器不允许自动复制时（http:// 非安全上下文），命令已为你选中，直接按 Ctrl / ⌘ + C 即可。</div>
 </div>
 
 <div class="toast" id="toast"></div>
+</div>
 
 <script>
 const BASE = "<!--BASE-->";
+const MACHINES = <!--MACHINES-->;
+
 // 很多精简系统只有 wget 没有 curl，所以默认命令两者都兼容
-const CMD_SH = k => '(command -v curl >/dev/null && curl -fsSL ' + BASE + '/i/' + k + ' || wget -qO- ' + BASE + '/i/' + k + ') | sudo bash';
-const CMD_PS = k => 'irm ' + BASE + '/i/' + k + '.ps1 | iex';
+const CMD_SH      = k => '(command -v curl >/dev/null && curl -fsSL ' + BASE + '/i/' + k + ' || wget -qO- ' + BASE + '/i/' + k + ') | sudo bash';
 const CMD_STOP_SH = k => '(command -v curl >/dev/null && curl -fsSL ' + BASE + '/i/' + k + '/stop.sh || wget -qO- ' + BASE + '/i/' + k + '/stop.sh) | sudo bash';
+const CMD_PS      = k => 'irm ' + BASE + '/i/' + k + '.ps1 | iex';
 const CMD_STOP_PS = k => 'irm ' + BASE + '/i/' + k + '/stop.ps1 | iex';
 
 function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1600);}
+function el(tag, cls, text){const e=document.createElement(tag); if(cls) e.className=cls; if(text!=null) e.textContent=text; return e;}
 
-// 复制：navigator.clipboard 只在 HTTPS / localhost 存在，
-// 用 http://内网IP 打开时必须退回到 execCommand，再不行就弹出可全选的输入框
+// 复制三层降级：安全上下文剪贴板 → execCommand → 弹出可全选输入框
 function legacyCopy(text){
   try{
     const ta=document.createElement('textarea');
@@ -266,24 +333,120 @@ function legacyCopy(text){
     return ok;
   }catch(e){ return false; }
 }
-function showManual(text){
-  const box=document.getElementById('manual');
-  const inp=document.getElementById('manualText');
-  inp.value=text; box.style.display='block';
-  inp.focus(); inp.select();
+async function copyText(text){
+  if(window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText){
+    try{ await navigator.clipboard.writeText(text); return true; }catch(e){}
+  }
+  return legacyCopy(text);
+}
+function showManual(title, items){
+  document.getElementById('manualTitle').textContent = title;
+  const list = document.getElementById('manualList');
+  list.innerHTML = '';
+  items.forEach(it=>{
+    const row = el('div','mrow');
+    row.appendChild(el('div','mlabel', it.label));
+    const inp = el('input','minput');
+    inp.readOnly = true; inp.value = it.text;
+    inp.onclick = () => inp.select();
+    row.appendChild(inp);
+    list.appendChild(row);
+  });
+  const box = document.getElementById('manual');
+  box.style.display = 'block';
+  const first = list.querySelector('input');
+  if(first){ first.focus(); first.select(); }
   box.scrollIntoView({block:'nearest'});
 }
 function closeManual(){ document.getElementById('manual').style.display='none'; }
-function copy(text){
-  if(window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText){
-    navigator.clipboard.writeText(text).then(
-      ()=>toast('已复制'),
-      ()=>{ if(legacyCopy(text)) toast('已复制'); else showManual(text); }
-    );
+
+function copyBtn(label, group, cls, getText){
+  const b = el('button','btn ' + (cls||''), label);
+  b.onclick = async () => {
+    const text = getText();
+    const ok = await copyText(text);
+    if(!ok){ showManual(group + ' · 手动复制', [{label:'命令（已选中，按 Ctrl/⌘+C）', text}]); return; }
+    b.classList.add('copied'); b.textContent = '已复制 ✓';
+    setTimeout(()=>{ b.classList.remove('copied'); b.textContent = label; }, 1300);
+  };
+  return b;
+}
+function viewBtn(group, shOn, shOff, psOn, psOff){
+  const b = el('button','btn btn-ghost','查看命令');
+  b.onclick = () => showManual(group, [
+    {label:'Linux / macOS · 上线命令', text: shOn},
+    {label:'Linux / macOS · 下线命令', text: shOff},
+    {label:'Windows · 上线命令（管理员 PowerShell）', text: psOn},
+    {label:'Windows · 下线命令（管理员 PowerShell）', text: psOff},
+  ]);
+  return b;
+}
+
+function osGroup(title, tag, onCmd, offCmd, m, manualItems){
+  const g = el('div','group');
+  const t = el('div','gtitle');
+  t.appendChild(document.createTextNode(title));
+  if(tag) t.appendChild(el('span','gtag', tag));
+  g.appendChild(t);
+
+  const row = el('div','btnrow');
+  row.appendChild(copyBtn('复制上线命令', title, 'btn-primary', () => onCmd(m.key)));
+  row.appendChild(copyBtn('复制下线命令', title, '', () => offCmd(m.key)));
+  const v = el('button','btn btn-ghost','查看命令');
+  v.onclick = () => showManual(m.name + ' · ' + title, manualItems(m));
+  row.appendChild(v);
+  g.appendChild(row);
+  return g;
+}
+
+function renderMachines(){
+  const box = document.getElementById('machines');
+  box.innerHTML = '';
+  document.getElementById('mcount').textContent = MACHINES.length ? MACHINES.length + ' 台' : '暂无';
+  if(!MACHINES.length){
+    box.appendChild(el('div','empty','还没有机器，用下面的表单添加一台。'));
     return;
   }
-  if(legacyCopy(text)){ toast('已复制'); return; }
-  showManual(text);
+  for(let idx = 0; idx < MACHINES.length; idx++){
+    const m = MACHINES[idx];
+    const card = el('div','mcard');
+
+    const head = el('div','mhead');
+    head.appendChild(el('div','mname', m.name));
+    const pill = el('span','pill ' + (m.online ? 'on' : 'off'));
+    pill.dataset.idx = String(idx);
+    pill.appendChild(el('span','dot'));
+    pill.appendChild(el('span','pill-text', m.online ? '在线' : '离线'));
+    head.appendChild(pill);
+    card.appendChild(head);
+
+    const meta = el('div','mmeta');
+    const c1 = el('span','chip'); c1.appendChild(document.createTextNode('映射端口 '));
+    c1.appendChild(el('b', null, String(m.port))); meta.appendChild(c1);
+    meta.appendChild(el('span','arrow','←'));
+    const c2 = el('span','chip'); c2.appendChild(document.createTextNode('本机 '));
+    c2.appendChild(el('b', null, String(m.net_port))); meta.appendChild(c2);
+    card.appendChild(meta);
+
+    card.appendChild(osGroup('Linux / macOS', '需要 sudo', CMD_SH, CMD_STOP_SH, m,
+      mm => ([
+        {label:'上线命令', text: CMD_SH(mm.key)},
+        {label:'下线命令', text: CMD_STOP_SH(mm.key)},
+      ])));
+    card.appendChild(osGroup('Windows', '需管理员 PowerShell', CMD_PS, CMD_STOP_PS, m,
+      mm => ([
+        {label:'上线命令', text: CMD_PS(mm.key)},
+        {label:'下线命令', text: CMD_STOP_PS(mm.key)},
+      ])));
+
+    const foot = el('div','mfoot');
+    const del = el('button','btn btn-ghost btn-danger','删除这台机器');
+    del.onclick = () => delMachine(m.name);
+    foot.appendChild(del);
+    card.appendChild(foot);
+
+    box.appendChild(card);
+  }
 }
 
 async function api(path, body){
@@ -318,54 +481,51 @@ async function addMachine(){
 }
 
 async function delMachine(name){
-  if(!confirm('删除机器 ' + name + '？其上线地址将立即失效。')) return;
+  if(!confirm('删除机器 ' + name + '？它的上线/下线命令会立即失效。')) return;
   if(await api('/api/machines/delete', {name})){ toast('已删除'); setTimeout(()=>location.reload(), 700); }
 }
 
-async function refreshStatus(){
-  const r = await fetch('/api/status'); const j = await r.json();
-  for(const [name, online] of Object.entries(j.machines||{})){
-    const el = document.querySelector('[data-status="'+CSS.escape(name)+'"]');
-    if(el){ el.className = 'pill ' + (online?'on':'off'); el.textContent = online?'在线':'离线'; }
-  }
+function statusSelector(idx){
+  return '[data-idx="' + idx + '"]';
 }
-setInterval(refreshStatus, 5000); refreshStatus();
+async function refreshStatus(){
+  try{
+    const r = await fetch('/api/status');
+    const j = await r.json();
+    MACHINES.forEach((m, idx) => {
+      const online = !!(j.machines || {})[m.name];
+      m.online = online;
+      const pill = document.querySelector(statusSelector(idx));
+      if(pill){
+        pill.className = 'pill ' + (online ? 'on' : 'off');
+        const t = pill.querySelector('.pill-text');
+        if(t) t.textContent = online ? '在线' : '离线';
+      }
+    });
+  }catch(e){}
+}
+
+renderMachines();
+setInterval(refreshStatus, 5000);
+refreshStatus();
 </script>
 </body>
 </html>
 """
 
 
-def render_rows(cfg):
-    if not cfg["machines"]:
-        return '<tr><td colspan="6" style="color:#888">还没有机器，先在下面添加一台。</td></tr>'
-    base = cfg["public_base"].rstrip("/")
-    rows = []
+def machines_payload(cfg):
+    """给前端的机器数据：卡片在前端渲染，避免把用户输入拼进 HTML/JS 里"""
+    payload = []
     for m in cfg["machines"]:
-        name = str(m["name"])
-        online = port_is_open(m["port"])
-        rows.append(
-            "<tr>"
-            "<td><b>%s</b></td>"
-            '<td><code>%s</code></td>'
-            "<td>%s</td>"
-            '<td><span class="pill %s" data-status="%s">%s</span></td>'
-            '<td><div class="row-actions">'
-            '<button class="tiny" onclick="copy(CMD_SH(\'%s\'))">复制 Linux/mac</button>'
-            '<button class="tiny" onclick="copy(CMD_PS(\'%s\'))">复制 Windows</button>'
-            '<button class="tiny" onclick="showManual(CMD_SH(\'%s\'))">查看</button>'
-            '<button class="tiny" onclick="copy(CMD_STOP_SH(\'%s\'))">复制下线(sh)</button>'
-            '<button class="tiny" onclick="copy(CMD_STOP_PS(\'%s\'))">复制下线(ps1)</button>'
-            "</div></td>"
-            '<td><div class="row-actions">'
-            '<button class="tiny" onclick="delMachine(\'%s\')">删除</button>'
-            "</div></td>"
-            "</tr>"
-            % (name, m["port"], m.get("net_port", 22),
-               "on" if online else "off", name, "在线" if online else "离线",
-               m["key"], m["key"], m["key"], m["key"], m["key"], name)
-        )
-    return "\n".join(rows)
+        payload.append({
+            "name": str(m["name"]),
+            "key": str(m["key"]),
+            "port": int(m["port"]),
+            "net_port": int(m.get("net_port", 22)),
+            "online": port_is_open(m["port"]),
+        })
+    return json.dumps(payload, ensure_ascii=False)
 
 
 # --------------------------------------------------------------------------- #
@@ -522,7 +682,7 @@ class Handler(BaseHTTPRequestHandler):
                     '请填入与服务端 <code>-token</code> 一致的值。</div>')
 
         replacements = {
-            "<!--ROWS-->": render_rows(cfg),
+            "<!--MACHINES-->": machines_payload(cfg),
             "<!--WARN-->": warn,
             "<!--TOKEN_MASK-->": mask(cfg.get("token", "")) or "（未设置）",
             "<!--NEXT_PORT-->": str(next_free_port(cfg) or ""),
