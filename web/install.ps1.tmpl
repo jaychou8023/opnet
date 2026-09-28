@@ -1,0 +1,98 @@
+# OpNet 一键上线脚本（Windows / PowerShell，由服务端按机器生成，端口已写死）
+# 用法: 以【管理员】身份打开 PowerShell，然后执行
+#   irm {{PUBLIC_BASE}}/i/{{KEY}}.ps1 | iex
+$ErrorActionPreference = 'Stop'
+try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
+
+$BASE_URL     = "{{PUBLIC_BASE}}"
+$KEY          = "{{KEY}}"
+$SERVER_HOST  = "{{SERVER_HOST}}"
+$CONTROL_PORT = "{{CONTROL_PORT}}"
+$TOKEN        = "{{TOKEN}}"
+$WANT_PORT    = "{{WANT_PORT}}"
+$NET_PORT     = "{{NET_PORT}}"
+$MACHINE      = "{{NAME}}"
+
+function Say($m) { Write-Host "[opnet] $m" -ForegroundColor Green }
+function Warn($m) { Write-Host "[opnet] $m" -ForegroundColor Yellow }
+function Die($m) { Write-Host "[opnet] $m" -ForegroundColor Red; exit 1 }
+
+# ---------- 0. 必须是管理员 ----------
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) { Die "请以【管理员】身份打开 PowerShell 再执行本命令" }
+
+$arch = $env:PROCESSOR_ARCHITECTURE
+if ($arch -eq 'ARM64') { Warn "检测到 ARM64 Windows，将使用 amd64 客户端（由系统 x64 模拟运行）" }
+
+$dir = 'C:\opnet-client'
+New-Item -ItemType Directory -Force -Path $dir | Out-Null
+
+Say "机器: $MACHINE  平台: Windows/$arch"
+Say "下载客户端 opnet-client-windows-amd64.exe ..."
+try {
+    Invoke-WebRequest -Uri "$BASE_URL/i/$KEY/bin/opnet-client-windows-amd64.exe" `
+        -OutFile "$dir\opnet-client.exe" -UseBasicParsing
+} catch {
+    Die "客户端下载失败（检查公网地址是否可达）: $($_.Exception.Message)"
+}
+
+# ---------- 1. 确保 OpenSSH Server 已安装并已启动 ----------
+$sshdSvc = Get-Service -Name sshd -ErrorAction SilentlyContinue
+if (-not $sshdSvc) {
+    Say "未检测到 OpenSSH Server，正在安装（Windows 可选功能）..."
+    $cap = Get-WindowsCapability -Online -Name 'OpenSSH.Server*' | Select-Object -First 1
+    if (-not $cap) { Die "系统未提供 OpenSSH.Server 可选功能，请手动安装" }
+    if ($cap.State -ne 'Installed') {
+        Add-WindowsCapability -Online -Name $cap.Name | Out-Null
+    }
+}
+Say "启动 sshd 服务并设为自动启动 ..."
+Set-Service -Name sshd -StartupType Automatic
+Start-Service sshd -ErrorAction SilentlyContinue
+
+$fw = Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue
+if (-not $fw) {
+    Say "添加防火墙规则（放行 22/tcp）..."
+    New-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -DisplayName 'OpenSSH Server (sshd)' `
+        -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 | Out-Null
+}
+
+# ---------- 2. 起客户端（同一端口先停旧的） ----------
+$old = Get-CimInstance Win32_Process -Filter "Name = 'opnet-client.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like "*-wantport $WANT_PORT*" }
+if ($old) {
+    Say "停止旧的客户端 (pid: $($old.ProcessId -join ', '))"
+    $old | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Seconds 1
+}
+
+Say "建立隧道：本机 $NET_PORT → ${SERVER_HOST}:$WANT_PORT"
+$clientArgs = @('-token', $TOKEN, '-server', $SERVER_HOST, '-port', "$CONTROL_PORT",
+                '-netport', "$NET_PORT", '-wantport', "$WANT_PORT", '-persist')
+Start-Process -FilePath "$dir\opnet-client.exe" -ArgumentList $clientArgs -WindowStyle Hidden `
+    -RedirectStandardOutput "$dir\client.log" -RedirectStandardError "$dir\client.err.log"
+Start-Sleep -Seconds 4
+
+$proc = Get-Process -Name opnet-client -ErrorAction SilentlyContinue
+if (-not $proc) {
+    Warn "客户端已退出，错误日志："
+    if (Test-Path "$dir\client.err.log") { Get-Content "$dir\client.err.log" | Write-Host }
+    Die "上线失败"
+}
+if ((Test-Path "$dir\client.log") -and -not (Select-String -Path "$dir\client.log" -Pattern '认证成功' -Quiet)) {
+    Warn "未看到认证成功，日志："
+    Get-Content "$dir\client.log" | Write-Host
+    Die "上线失败（端口可能被占用，或 token/地址不对）"
+}
+
+$user = "$env:USERDOMAIN\$env:USERNAME"
+Write-Host ""
+Write-Host "========================================"
+Write-Host " 上线成功"
+Write-Host "   机器        : $MACHINE"
+Write-Host "   映射端口    : $WANT_PORT  <-  本机 $NET_PORT"
+Write-Host "   从外网连接  : ssh -p $WANT_PORT $user@$SERVER_HOST"
+Write-Host "   客户端日志  : C:\opnet-client\client.log"
+Write-Host "   下线        : irm $BASE_URL/i/$KEY/stop.ps1 | iex"
+Write-Host "   注意        : 重启机器后隧道消失，重跑本命令即可"
+Write-Host "========================================"

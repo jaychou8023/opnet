@@ -22,12 +22,19 @@ import (
 //
 // v2 变更: MsgNewConn 载荷由裸 ClientID 改为 ClientID(4) + AuthTag(16)，
 // 数据通道必须通过 HMAC 证明持有 token；同时 clientID/connID 改为随机值。
+//
+// v3 变更: MsgAuth 载荷新增 want_port，客户端可申请固定映射端口。
+// 端口占用或越界时服务端明确拒绝，不再静默换端口——固定端口是稳定入口的前提。
+//
 // 旧版客户端会在首帧因版本不符被明确拒绝，避免"认证成功但数据通道静默失败"。
 const (
 	frameHeaderSize = 12 // 2 + 1 + 1 + 4 + 4
-	protocolVersion = 0x02
+	protocolVersion = 0x03
 	maxPayloadSize  = 1 << 20 // 1MB 防止异常大包
 )
+
+// PortSlots 是映射端口槽位数量：允许的端口范围为 [BasePort, BasePort+PortSlots-1]
+const PortSlots = 100
 
 // MsgNewConn 载荷布局
 // NOTE: 数据通道与控制通道共用同一监听端口，首帧类型无法证明身份，

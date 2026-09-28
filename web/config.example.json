@@ -1,0 +1,19 @@
+{
+  "public_base": "https://opnet.example.com",
+  "server_host": "opnet.example.com",
+  "control_port": 2221,
+  "base_port": 2222,
+  "port_slots": 100,
+  "token": "改成与服务端 -token 一致的值",
+  "admin_user": "admin",
+  "admin_pass": "改成你的面板密码",
+  "bin_dir": "/opt/opnet/bin",
+  "machines": [
+    {
+      "name": "mac-mini",
+      "key": "由面板自动生成，不用手填",
+      "port": 2222,
+      "net_port": 22
+    }
+  ]
+}

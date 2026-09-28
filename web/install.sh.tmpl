@@ -1,0 +1,140 @@
+#!/bin/sh
+# OpNet 一键上线脚本（由服务端按机器生成，端口已写死）
+# 用法: curl -fsSL {{PUBLIC_BASE}}/i/{{KEY}} | sudo bash
+set -eu
+
+BASE_URL="{{PUBLIC_BASE}}"
+KEY="{{KEY}}"
+SERVER_HOST="{{SERVER_HOST}}"
+CONTROL_PORT="{{CONTROL_PORT}}"
+TOKEN="{{TOKEN}}"
+WANT_PORT="{{WANT_PORT}}"
+NET_PORT="{{NET_PORT}}"
+MACHINE="{{NAME}}"
+
+GREEN='\033[1;32m'; RED='\033[1;31m'; YELLOW='\033[1;33m'; NC='\033[0m'
+log()  { printf "${GREEN}[opnet]${NC} %s\n" "$*"; }
+warn() { printf "${YELLOW}[opnet]${NC} %s\n" "$*"; }
+die()  { printf "${RED}[opnet]${NC} %s\n" "$*" >&2; exit 1; }
+
+# 下载器：很多精简系统只有 wget 没有 curl（反之亦然）
+fetch() { # fetch <url> <outfile>
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$1" -o "$2"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$2" "$1"
+  else
+    die "系统既没有 curl 也没有 wget，请先安装其一：apt-get install -y curl（或 yum install -y curl）"
+  fi
+}
+
+[ "$(id -u)" = "0" ] || die "需要 root：请用 sudo bash 运行（$(command -v curl >/dev/null 2>&1 && echo curl || echo wget) 拉脚本后再 sudo bash）"
+
+OS=$(uname -s)
+ARCH=$(uname -m)
+case "$OS" in
+  Linux)
+    case "$ARCH" in
+      x86_64|amd64) BIN=opnet-client-linux-amd64 ;;
+      aarch64|arm64) die "服务端尚未提供 linux-arm64 客户端，请告知管理员补编译" ;;
+      *) die "不支持的 Linux 架构: $ARCH" ;;
+    esac ;;
+  Darwin)
+    case "$ARCH" in
+      arm64)  BIN=opnet-client-darwin-arm64 ;;
+      x86_64) BIN=opnet-client-darwin-amd64 ;;
+      *) die "不支持的 macOS 架构: $ARCH" ;;
+    esac ;;
+  *) die "不支持的平台: $OS（Windows 请用页面上的 PowerShell 命令）" ;;
+esac
+
+WORK=/opt/opnet-client
+mkdir -p "$WORK"
+
+log "机器: ${MACHINE}  平台: ${OS}/${ARCH}"
+log "下载客户端 ${BIN} ..."
+fetch "${BASE_URL}/i/${KEY}/bin/${BIN}" "${WORK}/opnet-client.new" || die "客户端下载失败（检查公网地址是否可达）"
+mv "${WORK}/opnet-client.new" "${WORK}/opnet-client"
+chmod 755 "${WORK}/opnet-client"
+
+# ---------- 1. 确保 sshd 已安装并已启动 ----------
+if [ "$OS" = "Linux" ]; then
+  if ! command -v sshd >/dev/null 2>&1; then
+    log "未检测到 sshd，正在安装 openssh-server ..."
+    if command -v apt-get >/dev/null 2>&1; then
+      DEBIAN_FRONTEND=noninteractive apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openssh-server
+    elif command -v dnf >/dev/null 2>&1; then
+      dnf install -y -q openssh-server
+    elif command -v yum >/dev/null 2>&1; then
+      yum install -y -q openssh-server
+    elif command -v apk >/dev/null 2>&1; then
+      apk add --no-cache openssh
+    else
+      die "无法自动安装 openssh-server，请手动安装后重跑"
+    fi
+  fi
+  systemctl enable --now ssh >/dev/null 2>&1 || systemctl enable --now sshd >/dev/null 2>&1 || \
+    warn "systemctl 启用 sshd 失败（容器环境？），请确认 22 端口已监听"
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+    ufw allow 22/tcp >/dev/null 2>&1 || true
+  fi
+else
+  # macOS: 开启"远程登录"
+  log "开启 macOS 远程登录（sshd）..."
+  launchctl enable system/com.openssh.sshd 2>/dev/null || true
+  launchctl bootout system /System/Library/LaunchDaemons/ssh.plist 2>/dev/null || true
+  launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist 2>/dev/null || \
+    warn "launchctl 加载 ssh 失败，尝试 systemsetup 兜底"
+  systemsetup -setremotelogin on >/dev/null 2>&1 || true
+fi
+
+sshd_ok=0
+if command -v sshd >/dev/null 2>&1; then sshd_ok=1; fi
+if [ "$sshd_ok" = "0" ]; then
+  warn "未确认 sshd 就绪，隧道仍会建立，但 SSH 可能连不上"
+fi
+
+# ---------- 2. 起客户端（同一端口先停旧的，避免抢端口） ----------
+OLD=$(pgrep -f "opnet-client.*-wantport ${WANT_PORT}" 2>/dev/null || true)
+if [ -n "$OLD" ]; then
+  log "停止旧的客户端 (pid: $(echo $OLD | tr '\n' ' '))"
+  kill $OLD 2>/dev/null || true
+  sleep 1
+fi
+
+log "建立隧道：本机 ${NET_PORT} → ${SERVER_HOST}:${WANT_PORT}"
+nohup "${WORK}/opnet-client" \
+  -token "$TOKEN" \
+  -server "$SERVER_HOST" \
+  -port "$CONTROL_PORT" \
+  -netport "$NET_PORT" \
+  -wantport "$WANT_PORT" \
+  -persist >"${WORK}/client.log" 2>&1 &
+CLIENT_PID=$!
+sleep 3
+
+if ! kill -0 "$CLIENT_PID" 2>/dev/null; then
+  printf '\n' >&2
+  warn "客户端已退出，日志如下："
+  cat "${WORK}/client.log" >&2
+  die "上线失败"
+fi
+if ! grep -q "认证成功" "${WORK}/client.log" 2>/dev/null; then
+  warn "未看到认证成功，日志如下："
+  cat "${WORK}/client.log" >&2
+  die "上线失败（端口可能被占用，或 token/地址不对）"
+fi
+
+USER_NOW=$(id -un)
+cat <<EOF
+
+========================================
+ 上线成功
+   机器        : ${MACHINE}
+   映射端口    : ${WANT_PORT}  ←  本机 ${NET_PORT}
+   从外网连接  : ssh -p ${WANT_PORT} ${USER_NOW}@${SERVER_HOST}
+   客户端日志  : tail -f ${WORK}/client.log
+   下线        : curl -fsSL ${BASE_URL}/i/${KEY}/stop.sh | sudo bash
+   注意        : 重启机器后隧道消失，重跑本命令即可
+========================================
+EOF

@@ -19,6 +19,8 @@ import (
 type authRequest struct {
 	Token   string `json:"token"`
 	NetPort int    `json:"net_port"`
+	// WantPort 非 0 时申请固定映射端口，服务端占用则拒绝
+	WantPort int `json:"want_port,omitempty"`
 }
 
 // authResponse 认证响应载荷
@@ -35,6 +37,7 @@ type Client struct {
 	token       string
 	serverAddr  string
 	netPort     int
+	wantPort    int
 	controlPort int
 	persist     bool
 	timeout     time.Duration
@@ -48,7 +51,8 @@ type Client struct {
 }
 
 // NewClient 创建新的客户端实例
-func NewClient(token string, serverAddr string, netPort int, controlPort int, persist bool, timeoutHours int) *Client {
+// wantPort 非 0 时向服务端申请固定映射端口
+func NewClient(token string, serverAddr string, netPort int, wantPort int, controlPort int, persist bool, timeoutHours int) *Client {
 	timeout := time.Duration(timeoutHours) * time.Hour
 	if persist {
 		// 持久化模式：非常长的超时
@@ -59,6 +63,7 @@ func NewClient(token string, serverAddr string, netPort int, controlPort int, pe
 		token:       token,
 		serverAddr:  serverAddr,
 		netPort:     netPort,
+		wantPort:    wantPort,
 		controlPort: controlPort,
 		persist:     persist,
 		timeout:     timeout,
@@ -120,8 +125,9 @@ func (c *Client) Run() error {
 // authenticate 执行 Token 认证
 func (c *Client) authenticate() error {
 	req := authRequest{
-		Token:   c.token,
-		NetPort: c.netPort,
+		Token:    c.token,
+		NetPort:  c.netPort,
+		WantPort: c.wantPort,
 	}
 	data, err := json.Marshal(req)
 	if err != nil {
@@ -163,6 +169,9 @@ func (c *Client) authenticate() error {
 
 	c.magic = resp.Magic
 	c.clientID = resp.ClientID
+	if c.wantPort != 0 && resp.AssignedPort != c.wantPort {
+		return fmt.Errorf("服务端返回的端口 %d 与申请的 %d 不一致", resp.AssignedPort, c.wantPort)
+	}
 	log.Printf("[客户端] 本地端口 %d → 服务端映射端口 %d (客户端 ID: %d)",
 		c.netPort, resp.AssignedPort, c.clientID)
 

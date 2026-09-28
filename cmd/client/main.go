@@ -12,6 +12,7 @@ func main() {
 	token := flag.String("token", "", "认证 Token（必填）")
 	serverAddr := flag.String("server", "", "服务端地址（域名或 IP，必填）")
 	netPort := flag.Int("netport", 0, "要映射的本地端口（必填，如 22）")
+	wantPort := flag.Int("wantport", 0, "申请固定的服务端映射端口（0 表示由服务端自动分配）")
 	controlPort := flag.Int("port", 2221, "服务端控制通道端口（默认 2221）")
 	persist := flag.Bool("persist", false, "持久化模式，不自动断开")
 	timeout := flag.Int("timeout", 2, "超时时间（小时），默认 2 小时后自动断开")
@@ -32,6 +33,11 @@ func main() {
 	fmt.Println("========================================")
 	fmt.Printf("  服务端: %s:%d\n", *serverAddr, *controlPort)
 	fmt.Printf("  本地端口: %d\n", *netPort)
+	if *wantPort != 0 {
+		fmt.Printf("  申请映射端口: %d（固定）\n", *wantPort)
+	} else {
+		fmt.Println("  申请映射端口: 自动分配")
+	}
 	if *persist {
 		fmt.Println("  模式: 持久化（不自动断开）")
 	} else {
@@ -39,7 +45,7 @@ func main() {
 	}
 	fmt.Println("========================================")
 
-	c := client.NewClient(*token, *serverAddr, *netPort, *controlPort, *persist, *timeout)
+	c := client.NewClient(*token, *serverAddr, *netPort, *wantPort, *controlPort, *persist, *timeout)
 
 	if err := c.Run(); err != nil {
 		log.Fatalf("[客户端] 运行错误: %v", err)

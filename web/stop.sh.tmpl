@@ -1,0 +1,25 @@
+#!/bin/sh
+# OpNet 下线脚本：停掉本机为该端口建立的隧道
+# 用法: curl -fsSL {{PUBLIC_BASE}}/i/{{KEY}}/stop.sh | sudo bash
+set -eu
+
+WANT_PORT="{{WANT_PORT}}"
+MACHINE="{{NAME}}"
+
+[ "$(id -u)" = "0" ] || { echo "需要 root：请用 sudo bash 运行" >&2; exit 1; }
+
+PIDS=$(pgrep -f "opnet-client.*-wantport ${WANT_PORT}" 2>/dev/null || true)
+if [ -z "$PIDS" ]; then
+  echo "[opnet] 机器 ${MACHINE} 的隧道（端口 ${WANT_PORT}）本来就不在运行"
+  exit 0
+fi
+
+echo "[opnet] 停止机器 ${MACHINE} 的隧道 (pid: $(echo $PIDS | tr '\n' ' '))"
+kill $PIDS 2>/dev/null || true
+sleep 1
+PIDS=$(pgrep -f "opnet-client.*-wantport ${WANT_PORT}" 2>/dev/null || true)
+if [ -n "$PIDS" ]; then
+  echo "[opnet] 仍在运行，强制结束"
+  kill -9 $PIDS 2>/dev/null || true
+fi
+echo "[opnet] 已下线，服务端端口 ${WANT_PORT} 已释放"

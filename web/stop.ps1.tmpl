@@ -1,0 +1,22 @@
+# OpNet 下线脚本（Windows）
+# 用法: 以【管理员】身份打开 PowerShell，执行
+#   irm {{PUBLIC_BASE}}/i/{{KEY}}/stop.ps1 | iex
+$ErrorActionPreference = 'Stop'
+try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
+
+$WANT_PORT = "{{WANT_PORT}}"
+$MACHINE   = "{{NAME}}"
+
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) { Write-Host "[opnet] 请以【管理员】身份打开 PowerShell" -ForegroundColor Red; exit 1 }
+
+$procs = Get-CimInstance Win32_Process -Filter "Name = 'opnet-client.exe'" -ErrorAction SilentlyContinue |
+         Where-Object { $_.CommandLine -like "*-wantport $WANT_PORT*" }
+if (-not $procs) {
+    Write-Host "[opnet] 机器 $MACHINE 的隧道（端口 $WANT_PORT）本来就不在运行"
+    exit 0
+}
+
+Write-Host "[opnet] 停止机器 $MACHINE 的隧道 (pid: $($procs.ProcessId -join ', '))"
+$procs | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Write-Host "[opnet] 已下线，服务端端口 $WANT_PORT 已释放"

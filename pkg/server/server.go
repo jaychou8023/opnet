@@ -18,6 +18,8 @@ import (
 type AuthRequest struct {
 	Token   string `json:"token"`
 	NetPort int    `json:"net_port"`
+	// WantPort 非 0 时表示客户端申请固定映射端口，占用或越界则认证失败
+	WantPort int `json:"want_port,omitempty"`
 }
 
 // AuthResponse 认证响应载荷
@@ -111,10 +113,11 @@ func (s *Server) handleControlConn(conn net.Conn, authFrame *protocol.Frame) {
 	}
 
 	// 分配映射端口
-	assignedPort := s.allocatePort()
-	if assignedPort == 0 {
-		log.Printf("[服务端] 无法分配端口 (%s)", remoteAddr)
-		resp := AuthResponse{OK: false, Message: "no available port"}
+	// NOTE: 先真实 listen 成功再登记端口，避免"号码占了但实际没监听"的假成功
+	listener, assignedPort, err := s.listenPort(authReq.WantPort)
+	if err != nil {
+		log.Printf("[服务端] 分配端口失败 (%s): %v", remoteAddr, err)
+		resp := AuthResponse{OK: false, Message: err.Error()}
 		data, _ := json.Marshal(resp)
 		protocol.WriteFrame(conn, 0, &protocol.Frame{Type: protocol.MsgAuthResp, Data: data})
 		conn.Close()
@@ -125,6 +128,7 @@ func (s *Server) handleControlConn(conn net.Conn, authFrame *protocol.Frame) {
 	magic, err := protocol.GenerateMagic()
 	if err != nil {
 		log.Printf("[服务端] 生成 magic 失败: %v", err)
+		listener.Close()
 		s.releasePort(assignedPort)
 		conn.Close()
 		return
@@ -135,6 +139,7 @@ func (s *Server) handleControlConn(conn net.Conn, authFrame *protocol.Frame) {
 		controlConn:  conn,
 		magic:        magic,
 		assignedPort: assignedPort,
+		listener:     listener,
 		done:         make(chan struct{}),
 	}
 	clientID, err := s.registerSession(session)
@@ -143,6 +148,7 @@ func (s *Server) handleControlConn(conn net.Conn, authFrame *protocol.Frame) {
 		resp := AuthResponse{OK: false, Message: "server busy"}
 		data, _ := json.Marshal(resp)
 		protocol.WriteFrame(conn, 0, &protocol.Frame{Type: protocol.MsgAuthResp, Data: data})
+		listener.Close()
 		s.releasePort(assignedPort)
 		conn.Close()
 		return
@@ -163,16 +169,22 @@ func (s *Server) handleControlConn(conn net.Conn, authFrame *protocol.Frame) {
 	}); err != nil {
 		log.Printf("[服务端] 发送认证响应失败: %v", err)
 		conn.Close()
+		listener.Close()
 		s.releasePort(assignedPort)
 		s.sessions.Delete(clientID)
 		return
 	}
 
-	log.Printf("[服务端] 客户端 #%d 认证成功 (%s)，映射端口 %d ← 远端本地端口 %d",
-		clientID, remoteAddr, assignedPort, authReq.NetPort)
+	if authReq.WantPort != 0 {
+		log.Printf("[服务端] 客户端 #%d 认证成功 (%s)，按申请固定映射端口 %d ← 远端本地端口 %d",
+			clientID, remoteAddr, assignedPort, authReq.NetPort)
+	} else {
+		log.Printf("[服务端] 客户端 #%d 认证成功 (%s)，映射端口 %d ← 远端本地端口 %d",
+			clientID, remoteAddr, assignedPort, authReq.NetPort)
+	}
 
 	// 启动映射端口监听
-	go s.runProxyListener(session)
+	go s.serveProxy(session)
 
 	// 处理控制通道后续消息（心跳、断连等）
 	s.handleControlMessages(session)
@@ -199,14 +211,52 @@ func (s *Server) registerSession(session *clientSession) (uint32, error) {
 	return 0, fmt.Errorf("no available client id")
 }
 
-// allocatePort 分配一个可用的映射端口（从 basePort 开始递增）
-func (s *Server) allocatePort() int {
-	for port := s.BasePort; port < s.BasePort+100; port++ {
-		if _, loaded := s.portInUse.LoadOrStore(port, true); !loaded {
-			return port
+// portCandidates 计算候选端口列表
+// wantPort == 0 时按槽位顺序自动分配；否则只尝试申请的端口（不静默换端口）
+func portCandidates(basePort, wantPort int) ([]int, error) {
+	slots := protocol.PortSlots
+	if wantPort != 0 {
+		if wantPort < basePort || wantPort >= basePort+slots {
+			return nil, fmt.Errorf("请求端口 %d 超出允许范围 %d-%d", wantPort, basePort, basePort+slots-1)
 		}
+		return []int{wantPort}, nil
 	}
-	return 0
+
+	ports := make([]int, 0, slots)
+	for port := basePort; port < basePort+slots; port++ {
+		ports = append(ports, port)
+	}
+	return ports, nil
+}
+
+// listenPort 在指定端口（wantPort != 0）或第一个可用端口上真实监听
+// NOTE: 只有 listen 成功才登记端口。wantPort 被占用时直接报错，
+// 不静默换端口——固定端口是稳定入口的前提，换了就等于配置失效。
+func (s *Server) listenPort(wantPort int) (net.Listener, int, error) {
+	candidates, err := portCandidates(s.BasePort, wantPort)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	var lastErr error
+	for _, port := range candidates {
+		if _, loaded := s.portInUse.LoadOrStore(port, true); loaded {
+			lastErr = fmt.Errorf("端口 %d 已被占用", port)
+			continue
+		}
+		listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		if err != nil {
+			s.portInUse.Delete(port)
+			lastErr = fmt.Errorf("监听端口 %d 失败: %v", port, err)
+			continue
+		}
+		return listener, port, nil
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("无可用端口")
+	}
+	return nil, 0, lastErr
 }
 
 // releasePort 释放映射端口
@@ -214,14 +264,9 @@ func (s *Server) releasePort(port int) {
 	s.portInUse.Delete(port)
 }
 
-// runProxyListener 在分配的映射端口上监听外部连接
-func (s *Server) runProxyListener(session *clientSession) {
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", session.assignedPort))
-	if err != nil {
-		log.Printf("[服务端] 监听映射端口 %d 失败: %v", session.assignedPort, err)
-		return
-	}
-	session.listener = listener
+// serveProxy 在已监听的映射端口上接受外部连接
+func (s *Server) serveProxy(session *clientSession) {
+	listener := session.listener
 
 	log.Printf("[服务端] 映射端口 %d 已开放，等待外部连接...", session.assignedPort)
 

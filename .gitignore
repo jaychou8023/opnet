@@ -1,0 +1,9 @@
+# Python
+__pycache__/
+*.pyc
+
+# 运行时配置（含 token 与面板密码）
+web/config.json
+
+# macOS
+.DS_Store

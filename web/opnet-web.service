@@ -1,0 +1,21 @@
+[Unit]
+Description=OpNet onboarding panel (config page + one-line install scripts)
+Documentation=https://github.com/jaychou8023/opnet
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/opnet/web
+ExecStart=/usr/bin/python3 /opt/opnet/web/web.py --config /opt/opnet/web/config.json --listen 0.0.0.0:8089
+Restart=always
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=opnet-web
+
+[Install]
+WantedBy=multi-user.target
