@@ -3,7 +3,9 @@ package protocol
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -17,10 +19,24 @@ import (
 
 // NOTE: 自定义二进制帧协议，避免使用已知穿透工具的协议特征
 // 帧结构: Magic(2) + Ver(1) + Type(1) + ConnID(4) + Len(4) + Payload(variable)
+//
+// v2 变更: MsgNewConn 载荷由裸 ClientID 改为 ClientID(4) + AuthTag(16)，
+// 数据通道必须通过 HMAC 证明持有 token；同时 clientID/connID 改为随机值。
+// 旧版客户端会在首帧因版本不符被明确拒绝，避免"认证成功但数据通道静默失败"。
 const (
 	frameHeaderSize = 12 // 2 + 1 + 1 + 4 + 4
-	protocolVersion = 0x01
+	protocolVersion = 0x02
 	maxPayloadSize  = 1 << 20 // 1MB 防止异常大包
+)
+
+// MsgNewConn 载荷布局
+// NOTE: 数据通道与控制通道共用同一监听端口，首帧类型无法证明身份，
+// 因此必须用 token 作为密钥做 HMAC，否则任何能连上控制端口的人
+// 都可以抢注 connID 劫持他人映射端口上的连接。
+const (
+	NewConnClientIDSize = 4
+	NewConnAuthTagSize  = 16 // HMAC-SHA256 截断
+	NewConnPayloadSize  = NewConnClientIDSize + NewConnAuthTagSize
 )
 
 // 消息类型常量
@@ -107,6 +123,44 @@ func GenerateMagic() (uint16, error) {
 		return 0, err
 	}
 	return binary.BigEndian.Uint16(b), nil
+}
+
+// RandomUint32 生成非零随机 uint32，用于不可预测的 clientID / connID
+// NOTE: 原来这两个 ID 从 1 递增，攻击者可精确猜中并抢注
+func RandomUint32() (uint32, error) {
+	b := make([]byte, 4)
+	for i := 0; i < 64; i++ {
+		if _, err := rand.Read(b); err != nil {
+			return 0, fmt.Errorf("read random: %w", err)
+		}
+		if v := binary.BigEndian.Uint32(b); v != 0 {
+			return v, nil
+		}
+	}
+	return 0, fmt.Errorf("generate random uint32 failed")
+}
+
+// NewConnAuthTag 计算数据通道认证标签
+// NOTE: 以 token 为密钥对 session magic + clientID + connID 做 HMAC-SHA256 并截断。
+// magic 由服务端在认证响应中经 TLS 下发，token 只有双方知道，
+// 二者共同保证数据通道确实来自已认证的客户端。
+func NewConnAuthTag(token string, magic uint16, clientID, connID uint32) []byte {
+	mac := hmac.New(sha256.New, []byte(token))
+	var buf [10]byte
+	binary.BigEndian.PutUint16(buf[0:2], magic)
+	binary.BigEndian.PutUint32(buf[2:6], clientID)
+	binary.BigEndian.PutUint32(buf[6:10], connID)
+	mac.Write(buf[:])
+	return mac.Sum(nil)[:NewConnAuthTagSize]
+}
+
+// VerifyNewConnAuth 校验数据通道认证标签（常量时间比较）
+func VerifyNewConnAuth(token string, magic uint16, clientID, connID uint32, tag []byte) bool {
+	if len(tag) != NewConnAuthTagSize {
+		return false
+	}
+	expected := NewConnAuthTag(token, magic, clientID, connID)
+	return hmac.Equal(expected, tag)
 }
 
 // GenerateTLSConfig 生成自签名 TLS 配置用于控制通道加密

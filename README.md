@@ -71,4 +71,11 @@ ssh -p 2222 user@example.com
 - TLS 1.3 加密控制通道，外观与普通 HTTPS 流量一致
 - 自定义二进制帧协议，无已知穿透工具特征
 - 心跳间隔随机化（30-60秒），避免定时特征
-- Token 认证机制
+- Token 认证机制（常量时间比较）
+- **数据通道基于 token 的 HMAC-SHA256 认证**：`MsgNewConn` 载荷携带
+  `HMAC(token, magic|clientID|connID)`，未持有 token 的连接无法接入映射端口
+- 会话标识不可预测：`clientID`、`connID`、`magic` 均为随机值，
+  控制帧与数据帧均校验会话 `magic`
+
+> 协议版本：当前为 **v2**。v2 与 v1 不兼容（v1 数据通道无任何认证），
+> 混用时会在首帧因版本不符被明确拒绝，必须同时升级服务端与客户端。

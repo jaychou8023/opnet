@@ -43,6 +43,7 @@ type Client struct {
 	magic       uint16
 	clientID    uint32
 	done        chan struct{}
+	doneOnce    sync.Once
 	wg          sync.WaitGroup
 }
 
@@ -63,6 +64,15 @@ func NewClient(token string, serverAddr string, netPort int, controlPort int, pe
 		timeout:     timeout,
 		done:        make(chan struct{}),
 	}
+}
+
+// closeDone 幂等关闭 done
+// NOTE: timeoutWatcher 与 handleControlMessages 可能同时收尾，
+// 直接 close 会 panic: close of closed channel，故用 sync.Once 收敛
+func (c *Client) closeDone() {
+	c.doneOnce.Do(func() {
+		close(c.done)
+	})
 }
 
 // Run 启动客户端，连接服务端并开始端口映射
@@ -146,6 +156,11 @@ func (c *Client) authenticate() error {
 		return fmt.Errorf("server rejected: %s", resp.Message)
 	}
 
+	// NOTE: 认证响应必须携带本次会话 magic，否则可能存在中间人注入
+	if frame.Magic != resp.Magic {
+		return fmt.Errorf("magic mismatch in auth response: frame=0x%04x body=0x%04x", frame.Magic, resp.Magic)
+	}
+
 	c.magic = resp.Magic
 	c.clientID = resp.ClientID
 	log.Printf("[客户端] 本地端口 %d → 服务端映射端口 %d (客户端 ID: %d)",
@@ -183,7 +198,7 @@ func (c *Client) timeoutWatcher() {
 		protocol.WriteFrame(c.controlConn, c.magic, &protocol.Frame{
 			Type: protocol.MsgDisconnect,
 		})
-		close(c.done)
+		c.closeDone()
 		c.controlConn.Close()
 	case <-c.done:
 		return
@@ -193,11 +208,7 @@ func (c *Client) timeoutWatcher() {
 // handleControlMessages 监听控制通道消息并处理
 func (c *Client) handleControlMessages() {
 	defer func() {
-		select {
-		case <-c.done:
-		default:
-			close(c.done)
-		}
+		c.closeDone()
 		c.controlConn.Close()
 	}()
 
@@ -211,6 +222,12 @@ func (c *Client) handleControlMessages() {
 				log.Printf("[客户端] 读取控制消息失败: %v", err)
 				return
 			}
+		}
+
+		// NOTE: 校验服务端下发的会话 magic，丢弃不符合本会话的帧
+		if frame.Magic != c.magic {
+			log.Printf("[客户端] 控制消息 magic 校验失败 (0x%04x)，断开连接", frame.Magic)
+			return
 		}
 
 		switch frame.Type {
@@ -244,14 +261,16 @@ func (c *Client) openDataChannel(connID uint32) {
 		return
 	}
 
-	// 发送 NewConn 帧，携带 connID 和 clientID
-	clientIDBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(clientIDBytes, c.clientID)
+	// 发送 NewConn 帧，携带 connID 和 clientID，以及证明持有 token 的 HMAC 标签
+	// NOTE: 服务端据此校验数据通道身份，未认证连接无法接入映射端口
+	payload := make([]byte, protocol.NewConnPayloadSize)
+	binary.BigEndian.PutUint32(payload[0:protocol.NewConnClientIDSize], c.clientID)
+	copy(payload[protocol.NewConnClientIDSize:], protocol.NewConnAuthTag(c.token, c.magic, c.clientID, connID))
 
 	if err := protocol.WriteFrame(dataConn, c.magic, &protocol.Frame{
 		Type:   protocol.MsgNewConn,
 		ConnID: connID,
-		Data:   clientIDBytes,
+		Data:   payload,
 	}); err != nil {
 		log.Printf("[客户端] 发送 NewConn 失败: %v", err)
 		dataConn.Close()
