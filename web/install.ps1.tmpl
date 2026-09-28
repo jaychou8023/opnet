@@ -153,26 +153,41 @@ $clientArgs = @('-token', $TOKEN, '-server', $SERVER_HOST, '-port', "$CONTROL_PO
                 '-netport', "$NET_PORT", '-wantport', "$WANT_PORT", '-persist')
 Start-Process -FilePath "$dir\opnet-client.exe" -ArgumentList $clientArgs -WindowStyle Hidden `
     -RedirectStandardOutput "$dir\client.log" -RedirectStandardError "$dir\client.err.log"
-Start-Sleep -Seconds 4
 
-$proc = Get-Process -Name opnet-client -ErrorAction SilentlyContinue
-if (-not $proc) {
-    Warn "客户端已退出，错误日志："
-    if (Test-Path "$dir\client.err.log") { Get-Content "$dir\client.err.log" | Write-Host }
+# Windows 首次运行 exe 可能被杀软扫描，认证耗时不可预期：轮询最多 30 秒
+Say "等待客户端上线（最多 30 秒）..."
+$ready = $false
+for ($i = 0; $i -lt 30; $i++) {
+    Start-Sleep -Seconds 1
+    if ((Test-Path "$dir\client.log") -and (Select-String -Path "$dir\client.log" -Pattern '认证成功' -Quiet)) {
+        $ready = $true
+        break
+    }
+    if (-not (Get-Process -Name opnet-client -ErrorAction SilentlyContinue)) { break }
+}
+
+if (-not (Get-Process -Name opnet-client -ErrorAction SilentlyContinue)) {
+    Warn "客户端进程已退出，日志如下："
+    foreach ($f in @("$dir\client.log", "$dir\client.err.log")) {
+        if (Test-Path $f) { Get-Content $f | Write-Host }
+    }
     Die "上线失败"
 }
-if ((Test-Path "$dir\client.log") -and -not (Select-String -Path "$dir\client.log" -Pattern '认证成功' -Quiet)) {
-    Warn "未看到认证成功，日志："
-    Get-Content "$dir\client.log" | Write-Host
-    Die "上线失败（端口可能被占用，或 token/地址不对）"
+if (-not $ready) {
+    # 进程还活着，只是没在 30 秒内确认认证：不要 exit，否则窗口会直接关掉、看不到原因
+    Warn "30 秒内未在日志里看到「认证成功」，但进程仍在运行，隧道可能仍在建立中。"
+    Warn "稍后用这条命令查看结果：Get-Content $dir\client.log -Tail 20"
+    Get-Content "$dir\client.log" -Tail 20 -ErrorAction SilentlyContinue | Write-Host
 }
 
 $user = "$env:USERDOMAIN\$env:USERNAME"
+$status = if ($ready) { '已确认' } else { '未确认（见上方提示，进程仍在运行）' }
 Write-Host ""
 Write-Host "========================================"
-Write-Host " 上线成功"
+Write-Host " 上线$(if ($ready) {'成功'} else {'信息'})"
 Write-Host "   机器        : $MACHINE"
 Write-Host "   映射端口    : $WANT_PORT  <-  本机 $NET_PORT"
+Write-Host "   认证状态    : $status"
 Write-Host "   从外网连接  : ssh -p $WANT_PORT $user@$SERVER_HOST"
 Write-Host "   客户端日志  : C:\opnet-client\client.log"
 Write-Host "   sshd 来源   : $sshdNote"

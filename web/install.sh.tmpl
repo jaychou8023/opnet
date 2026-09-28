@@ -111,7 +111,17 @@ nohup "${WORK}/opnet-client" \
   -wantport "$WANT_PORT" \
   -persist >"${WORK}/client.log" 2>&1 &
 CLIENT_PID=$!
-sleep 3
+
+# 认证耗时不可预期（慢机器/首次执行），轮询最多 30 秒而不是固定 3 秒
+log "等待客户端上线（最多 30 秒）..."
+READY=0
+i=0
+while [ "$i" -lt 30 ]; do
+  sleep 1
+  i=$((i + 1))
+  if grep -q "认证成功" "${WORK}/client.log" 2>/dev/null; then READY=1; break; fi
+  kill -0 "$CLIENT_PID" 2>/dev/null || break
+done
 
 if ! kill -0 "$CLIENT_PID" 2>/dev/null; then
   printf '\n' >&2
@@ -119,22 +129,24 @@ if ! kill -0 "$CLIENT_PID" 2>/dev/null; then
   cat "${WORK}/client.log" >&2
   die "上线失败"
 fi
-if ! grep -q "认证成功" "${WORK}/client.log" 2>/dev/null; then
-  warn "未看到认证成功，日志如下："
-  cat "${WORK}/client.log" >&2
-  die "上线失败（端口可能被占用，或 token/地址不对）"
+if [ "$READY" != "1" ]; then
+  warn "30 秒内未看到「认证成功」，但进程仍在运行，隧道可能仍在建立中。"
+  warn "稍后用这条命令查看结果：tail -20 ${WORK}/client.log"
+  tail -20 "${WORK}/client.log" 2>/dev/null || true
 fi
 
 USER_NOW=$(id -un)
 cat <<EOF
 
 ========================================
- 上线成功
+ 上线$( [ "$READY" = "1" ] && echo 成功 || echo 信息 )
    机器        : ${MACHINE}
    映射端口    : ${WANT_PORT}  ←  本机 ${NET_PORT}
+   认证状态    : $( [ "$READY" = "1" ] && echo 已确认 || echo "未确认（见上方提示，进程仍在运行）" )
    从外网连接  : ssh -p ${WANT_PORT} ${USER_NOW}@${SERVER_HOST}
    客户端日志  : tail -f ${WORK}/client.log
    下线        : curl -fsSL ${BASE_URL}/i/${KEY}/stop.sh | sudo bash
+   卸载        : curl -fsSL ${BASE_URL}/i/${KEY}/uninstall.sh | sudo bash
    注意        : 重启机器后隧道消失，重跑本命令即可
 ========================================
 EOF
