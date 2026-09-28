@@ -342,9 +342,13 @@ PAGE = """<!DOCTYPE html>
 const BASE = "<!--BASE-->";
 const MACHINES = <!--MACHINES-->;
 
-// 很多精简系统只有 wget 没有 curl，所以默认命令两者都兼容
-const CMD_SH      = k => '(command -v curl >/dev/null && curl -fsSL ' + BASE + '/i/' + k + ' || wget -qO- ' + BASE + '/i/' + k + ') | sudo bash';
-const CMD_STOP_SH = k => '(command -v curl >/dev/null && curl -fsSL ' + BASE + '/i/' + k + '/stop.sh || wget -qO- ' + BASE + '/i/' + k + '/stop.sh) | sudo bash';
+// 很多精简系统只有 wget 没有 curl，所以两者都试；但只在"命令不存在"时才切换，
+// 不用 || 串联——否则 curl 真的报错（如 400）时会再抛一个 "wget: command not found"，误导排查
+const FETCH_CMD = url => 'if command -v curl >/dev/null 2>&1; then curl -fsSL ' + url +
+  '; elif command -v wget >/dev/null 2>&1; then wget -qO- ' + url +
+  '; else echo "需要 curl 或 wget，请先安装" >&2; exit 1; fi';
+const CMD_SH      = k => FETCH_CMD(BASE + '/i/' + k) + ' | sudo bash';
+const CMD_STOP_SH = k => FETCH_CMD(BASE + '/i/' + k + '/stop.sh') + ' | sudo bash';
 const CMD_PS      = k => 'irm ' + BASE + '/i/' + k + '.ps1 | iex';
 const CMD_STOP_PS = k => 'irm ' + BASE + '/i/' + k + '/stop.ps1 | iex';
 
