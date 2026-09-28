@@ -37,6 +37,13 @@ BIN_WHITELIST = {
     "opnet-client-windows-amd64.exe",
     "opnet-client-darwin-arm64",
     "opnet-client-darwin-amd64",
+    # Windows 离线 OpenSSH（PowerShell/Win32-OpenSSH 官方 release，5.7MB）
+    # 只放服务器，不进 git；文件名与 sha256 可在 config.json 里调整
+    "OpenSSH-Win64.zip",
+}
+CONTENT_TYPES = {
+    ".exe": "application/octet-stream",
+    ".zip": "application/zip",
 }
 KEY_RE = re.compile(r"^[0-9a-f]{16,64}$")
 
@@ -51,6 +58,9 @@ DEFAULT_CONFIG = {
     "admin_user": "admin",
     "admin_pass": "",
     "bin_dir": "/opt/opnet/bin",
+    # Windows 离线 OpenSSH：文件名与官方 release 的 sha256（放 /opt/opnet/bin/ 下）
+    "openssh_zip": "OpenSSH-Win64.zip",
+    "openssh_sha256": "23f50f3458c4c5d0b12217c6a5ddfde0137210a30fa870e98b29827f7b43aba5",
     "machines": [],
 }
 
@@ -176,6 +186,8 @@ def machine_mapping(cfg, machine):
         "NET_PORT": machine.get("net_port", 22),
         "KEY": machine["key"],
         "NAME": machine["name"],
+        "OPENSSH_ZIP": cfg.get("openssh_zip") or DEFAULT_CONFIG["openssh_zip"],
+        "OPENSSH_SHA256": cfg.get("openssh_sha256") or DEFAULT_CONFIG["openssh_sha256"],
     }
 
 
@@ -718,10 +730,20 @@ class Handler(BaseHTTPRequestHandler):
     def serve_page(self):
         cfg = current_config()
 
-        warn = ""
+        warns = []
         if not cfg.get("token"):
-            warn = ('<div class="card warn">还没设置 token：脚本会拿空 token 去认证，服务端会拒绝。'
-                    '请填入与服务端 <code>-token</code> 一致的值。</div>')
+            warns.append('还没设置 token：脚本会拿空 token 去认证，服务端会拒绝。'
+                         '请填入与服务端 <code>-token</code> 一致的值。')
+        zip_name = cfg.get("openssh_zip") or DEFAULT_CONFIG["openssh_zip"]
+        if not os.path.isfile(os.path.join(cfg["bin_dir"], zip_name)):
+            warns.append('内置 OpenSSH 包 <code>%s</code> 不在 <code>%s</code>：'
+                         'Windows 目标机会跳过离线安装、退回在线（需要 Windows Update）。'
+                         % (zip_name, cfg["bin_dir"]))
+        missing = [b for b in sorted(BIN_WHITELIST)
+                   if not os.path.isfile(os.path.join(cfg["bin_dir"], b))]
+        if missing:
+            warns.append('分发目录缺少文件：<code>%s</code>' % "、".join(missing))
+        warn = "".join('<div class="card warn">%s</div>' % w for w in warns)
 
         replacements = {
             "<!--MACHINES-->": machines_payload(cfg),
@@ -771,8 +793,10 @@ class Handler(BaseHTTPRequestHandler):
             file_path = os.path.join(cfg["bin_dir"], rest[1])
             if not os.path.isfile(file_path):
                 return self.send_text(404, "客户端二进制缺失：%s（请在服务端放置）" % rest[1])
+            ext = os.path.splitext(rest[1])[1].lower()
             with open(file_path, "rb") as fh:
-                return self.send_text(200, fh.read(), "application/octet-stream")
+                return self.send_text(200, fh.read(),
+                                      CONTENT_TYPES.get(ext, "application/octet-stream"))
 
         # /i/<key>/stop.sh | .ps1      —— 只停隧道
         if rest and rest[0].startswith("stop"):

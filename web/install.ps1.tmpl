@@ -12,22 +12,26 @@ $TOKEN        = "{{TOKEN}}"
 $WANT_PORT    = "{{WANT_PORT}}"
 $NET_PORT     = "{{NET_PORT}}"
 $MACHINE      = "{{NAME}}"
+$OPENSSH_ZIP  = "{{OPENSSH_ZIP}}"
+$OPENSSH_SHA  = "{{OPENSSH_SHA256}}"
 
-function Say($m) { Write-Host "[opnet] $m" -ForegroundColor Green }
+$dir = 'C:\opnet-client'
+
+function Say($m)  { Write-Host "[opnet] $m" -ForegroundColor Green }
 function Warn($m) { Write-Host "[opnet] $m" -ForegroundColor Yellow }
-function Die($m) { Write-Host "[opnet] $m" -ForegroundColor Red; exit 1 }
+function Die($m)  { Write-Host "[opnet] $m" -ForegroundColor Red; exit 1 }
 
 # ---------- 0. 必须是管理员 ----------
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) { Die "请以【管理员】身份打开 PowerShell 再执行本命令" }
 
 $arch = $env:PROCESSOR_ARCHITECTURE
-if ($arch -eq 'ARM64') { Warn "检测到 ARM64 Windows，将使用 amd64 客户端（由系统 x64 模拟运行）" }
+if ($arch -eq 'ARM64') { Warn "检测到 ARM64 Windows，将使用 amd64 客户端与 OpenSSH（由系统 x64 模拟运行）" }
 
-$dir = 'C:\opnet-client'
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
-
 Say "机器: $MACHINE  平台: Windows/$arch"
+
+# ---------- 1. 下载 opnet 客户端 ----------
 Say "下载客户端 opnet-client-windows-amd64.exe ..."
 try {
     Invoke-WebRequest -Uri "$BASE_URL/i/$KEY/bin/opnet-client-windows-amd64.exe" `
@@ -36,28 +40,106 @@ try {
     Die "客户端下载失败（检查公网地址是否可达）: $($_.Exception.Message)"
 }
 
-# ---------- 1. 确保 OpenSSH Server 已安装并已启动 ----------
-$sshdSvc = Get-Service -Name sshd -ErrorAction SilentlyContinue
-if (-not $sshdSvc) {
-    Say "未检测到 OpenSSH Server，正在安装（Windows 可选功能）..."
-    $cap = Get-WindowsCapability -Online -Name 'OpenSSH.Server*' | Select-Object -First 1
-    if (-not $cap) { Die "系统未提供 OpenSSH.Server 可选功能，请手动安装" }
-    if ($cap.State -ne 'Installed') {
-        Add-WindowsCapability -Online -Name $cap.Name | Out-Null
+# ---------- 2. sshd：已装直接用 → 内置离线包装 → 在线可选功能 ----------
+function Test-SshdReady { return [bool](Get-Service -Name sshd -ErrorAction SilentlyContinue) }
+
+function Enable-SshdService {
+    Set-Service -Name sshd -StartupType Automatic
+    if ((Get-Service -Name sshd).Status -ne 'Running') { Start-Service sshd }
+    $fw = Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue
+    if (-not $fw) {
+        Say "添加防火墙规则（放行 22/tcp）..."
+        New-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -DisplayName 'OpenSSH Server (sshd)' `
+            -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 | Out-Null
     }
 }
-Say "启动 sshd 服务并设为自动启动 ..."
-Set-Service -Name sshd -StartupType Automatic
-Start-Service sshd -ErrorAction SilentlyContinue
 
-$fw = Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue
-if (-not $fw) {
-    Say "添加防火墙规则（放行 22/tcp）..."
-    New-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -DisplayName 'OpenSSH Server (sshd)' `
-        -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 | Out-Null
+function Install-BundledOpenSSH {
+    $zip = Join-Path $dir $OPENSSH_ZIP
+    Say "下载内置 OpenSSH 离线包（不依赖 Windows Update）..."
+    Invoke-WebRequest -Uri "$BASE_URL/i/$KEY/bin/$OPENSSH_ZIP" -OutFile $zip -UseBasicParsing
+
+    $hash = (Get-FileHash -Algorithm SHA256 -Path $zip).Hash.ToLower()
+    if ($hash -ne $OPENSSH_SHA.ToLower()) {
+        throw "OpenSSH 包 sha256 校验失败（期望 $OPENSSH_SHA，实际 $hash）"
+    }
+    Say "sha256 校验通过"
+
+    $tmp = Join-Path $dir 'openssh-extract'
+    Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+    Expand-Archive -Path $zip -DestinationPath $tmp -Force
+
+    $src = Join-Path $tmp 'OpenSSH-Win64'
+    if (-not (Test-Path $src)) {
+        $first = Get-ChildItem -Path $tmp -Directory | Select-Object -First 1
+        if (-not $first) { throw "压缩包结构异常，未找到目录" }
+        $src = $first.FullName
+    }
+
+    $target = Join-Path $env:ProgramFiles 'OpenSSH'
+    New-Item -ItemType Directory -Force -Path $target | Out-Null
+    Copy-Item -Path (Join-Path $src '*') -Destination $target -Recurse -Force
+
+    # host key 不生成的话服务起不来
+    & (Join-Path $target 'ssh-keygen.exe') -A | Out-Null
+
+    $cfgDir  = Join-Path $env:ProgramData 'ssh'
+    $cfgFile = Join-Path $cfgDir 'sshd_config'
+    New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
+    if (-not (Test-Path $cfgFile)) {
+        Copy-Item (Join-Path $target 'sshd_config_default') $cfgFile -Force
+    }
+
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $target 'install-sshd.ps1') | Out-Null
+    if (-not (Test-SshdReady)) { throw "install-sshd.ps1 未能注册 sshd 服务" }
+
+    Enable-SshdService
+    Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+    return 'bundled'
 }
 
-# ---------- 2. 起客户端（同一端口先停旧的） ----------
+function Install-CapabilityOpenSSH {
+    Say "改用在线安装（Windows 可选功能，需要能访问 Windows Update）..."
+    $cap = Get-WindowsCapability -Online -Name 'OpenSSH.Server*' | Select-Object -First 1
+    if (-not $cap) { throw "系统未提供 OpenSSH.Server 可选功能" }
+    if ($cap.State -ne 'Installed') { Add-WindowsCapability -Online -Name $cap.Name | Out-Null }
+    if (-not (Test-SshdReady)) { throw "可选功能安装后仍未出现 sshd 服务" }
+    Enable-SshdService
+    return 'capability'
+}
+
+$sshdNote = ''
+if (Test-SshdReady) {
+    Say "系统已安装 sshd，直接使用（继续由 Windows Update 维护）"
+    Enable-SshdService
+    $sshdNote = '系统已有 sshd（继续由 Windows Update 维护）'
+} else {
+    $installed = $false
+    try {
+        Install-BundledOpenSSH | Out-Null
+        $installed = $true
+        $sshdNote = '内置离线包安装（不走 Windows Update，不会自动打补丁）'
+        Say "已用内置离线包安装 sshd"
+    } catch {
+        Warn "内置 OpenSSH 安装失败：$($_.Exception.Message)"
+    }
+    if (-not $installed) {
+        try {
+            Install-CapabilityOpenSSH | Out-Null
+            $installed = $true
+            $sshdNote = 'Windows 可选功能在线安装（由 Windows Update 维护）'
+            Say "已用 Windows 可选功能安装 sshd"
+        } catch {
+            Warn "在线安装也失败：$($_.Exception.Message)"
+        }
+    }
+    if (-not $installed) {
+        $sshdNote = '未安装成功（隧道仍会建立，但 SSH 可能连不上）'
+        Warn "sshd 未能安装，隧道仍会建立，但 SSH 可能连不上"
+    }
+}
+
+# ---------- 3. 起客户端（同一端口先停旧的） ----------
 $old = Get-CimInstance Win32_Process -Filter "Name = 'opnet-client.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -like "*-wantport $WANT_PORT*" }
 if ($old) {
@@ -93,6 +175,8 @@ Write-Host "   机器        : $MACHINE"
 Write-Host "   映射端口    : $WANT_PORT  <-  本机 $NET_PORT"
 Write-Host "   从外网连接  : ssh -p $WANT_PORT $user@$SERVER_HOST"
 Write-Host "   客户端日志  : C:\opnet-client\client.log"
+Write-Host "   sshd 来源   : $sshdNote"
 Write-Host "   下线        : irm $BASE_URL/i/$KEY/stop.ps1 | iex"
+Write-Host "   卸载        : irm $BASE_URL/i/$KEY/uninstall.ps1 | iex"
 Write-Host "   注意        : 重启机器后隧道消失，重跑本命令即可"
 Write-Host "========================================"

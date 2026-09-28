@@ -66,6 +66,41 @@ irm https://你的域名/i/<key>.ps1 | iex
 
 脚本做四件事：按系统/架构下载客户端 → 装并启用 sshd → 后台起隧道（`-wantport` 写死端口）→ 打印 `ssh -p <端口> <用户>@<域名>`。
 
+## Windows 的 sshd 从哪来（三级策略）
+
+Windows 目标机的 sshd 按下面顺序解决，**能离线就不联网**：
+
+1. **系统已装** → 直接启用并设为自启（什么都不装，继续由 Windows Update 维护）。
+2. **没装 → 内置离线包** → 从面板下载 `OpenSSH-Win64.zip`，**校验 sha256**，
+   解压到 `C:\Program Files\OpenSSH`，跑官方 `install-sshd.ps1` 注册服务、
+   `ssh-keygen -A` 生成 host key、写默认 `sshd_config`、加 22/tcp 防火墙规则。
+   这条路**不依赖 Windows Update**，所以在 WSUS 管控、LTSC、纯内网机器上也能成。
+3. **内置失败 → 在线可选功能** → 退回 `Add-WindowsCapability -Online -Name OpenSSH.Server*`。
+
+> **取舍**：第 2 步手动装的这份**不会随 Windows Update 自动打补丁**（第 1、3 步那份会）。
+> 内置的是 OpenSSH 10.0.0.0p2（≥9.8，已含 regreSSHion CVE-2024-6387 的修复）。
+> 临时上线用没问题；**要长期在线的机器，建议用系统自带那份**。
+
+### 离线包的来源与放置
+
+包不在 git 里，需要放到服务端 `bin_dir`（默认 `/opt/opnet/bin/`）：
+
+```bash
+# 在能上网的机器上下载，再传到服务端
+curl -LO https://github.com/PowerShell/Win32-OpenSSH/releases/download/10.0.0.0p2-Preview/OpenSSH-Win64.zip
+scp OpenSSH-Win64.zip root@<服务端>:/opt/opnet/bin/
+```
+
+| 项目 | 值 |
+|---|---|
+| 来源 | PowerShell/Win32-OpenSSH 官方 release（BSD 系许可，包内自带 `LICENSE.txt`） |
+| 版本 | 10.0.0.0p2 |
+| 文件名 | `OpenSSH-Win64.zip` |
+| sha256 | `23f50f3458c4c5d0b12217c6a5ddfde0137210a30fa870e98b29827f7b43aba5` |
+
+文件名与 sha256 可在 `config.json` 的 `openssh_zip` / `openssh_sha256` 里改（改完自动热加载）。
+校验不通过时脚本**不会**硬闯，会直接退回第 3 步在线安装。
+
 ## 下线 / 卸载的区别
 
 | 操作 | 进程 | 客户端文件 | sshd（装/启用状态） |
